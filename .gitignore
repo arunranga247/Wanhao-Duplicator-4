@@ -1,0 +1,14 @@
+# third-party slicing engine - download it (see README, section 2.2)
+engine/PrusaSlicer-*/
+engine/download/
+
+# build output (recreated by: python tools/build_exe.py)
+build/
+__pycache__/
+*.pyc
+
+# personal settings and runtime files (recreated automatically)
+tools/d4_settings.json
+output/*.txt
+output/.previews/
+output/*.png

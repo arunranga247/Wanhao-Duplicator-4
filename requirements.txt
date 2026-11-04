@@ -1,0 +1,7 @@
+# Duplicator 4 Studio - Python packages
+pyserial>=3.5        # USB link to the printer (s3g/x3g protocol)
+pillow>=10.0         # previews, icons, image display
+sv-ttk>=2.6          # Windows 11 style theme (optional: the app falls back to the plain look)
+
+# only needed to build Duplicator4Studio.exe
+pyinstaller>=6.10
