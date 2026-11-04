@@ -38,6 +38,7 @@ dual-extruder printer handled automatically.
 - [Command-line tools](#-command-line-tools)
 - [Troubleshooting](#-troubleshooting)
 - [Roadmap](#-roadmap)
+- [Support me](#-support-me)
 - [About](#-about)
 
 ---
@@ -307,6 +308,27 @@ python make_vase.py --height 35 --twist 120 --lobes 8
 - [ ] Re-enable bed heating after the thermistor is replaced
 - [ ] Two-colour printing from multi-part 3MF models
 - [ ] Print from SD card (send x3g to the printer's card over USB)
+
+---
+
+## 💖 Support me
+
+If Duplicator 4 Studio brought your printer back to life or saved you time, here is how you can help:
+
+<p>
+<a href="https://github.com/arunranga247/Wanhao-Duplicator-4"><img src="https://img.shields.io/github/stars/arunranga247/Wanhao-Duplicator-4?style=social" alt="GitHub stars"></a>
+<a href="https://github.com/arunranga247"><img src="https://img.shields.io/github/followers/arunranga247?style=social" alt="Follow arunranga247"></a>
+</p>
+
+| | How |
+|---|---|
+| ⭐ **Star the repository** | Click **Star** at the top of the [repository page](https://github.com/arunranga247/Wanhao-Duplicator-4). It helps other Duplicator 4 owners find the project. |
+| 🐛 **Report a bug or suggest an idea** | Open an [issue](https://github.com/arunranga247/Wanhao-Duplicator-4/issues/new) with your printer, firmware version and what happened |
+| 🔧 **Contribute** | Fork the repository, make your improvement and open a pull request |
+| 📢 **Share it** | Tell other Wanhao Duplicator 4 and MakerBot Replicator owners about it, in forums, groups and makerspaces |
+| 🖨️ **Show your prints** | Post a photo of something you printed with Duplicator 4 Studio in an issue or discussion |
+
+Every star, report and share keeps this project growing. **Thank you!**
 
 ---
 
