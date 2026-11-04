@@ -14,7 +14,7 @@ dual-extruder printer handled automatically.
 ![Slicer](https://img.shields.io/badge/Slicer-PrusaSlicer%202.9.6-EA4335)
 ![Version](https://img.shields.io/badge/version-1.0.0-1A73E8)
 
-**[⬇ Download the latest release](https://github.com/M2C-ARUN/Wanhao-Duplicator-4/releases/latest)**
+**[⬇ Download the latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest)**
 
 <img src="docs/images/prepare.png" alt="Duplicator 4 Studio - Prepare tab with a sliced model" width="900">
 
@@ -103,13 +103,13 @@ flowchart LR
 ### 1. Get the project
 
 **Easiest:** download **Duplicator4Studio-v1.0.0-windows.zip** from the
-[latest release](https://github.com/M2C-ARUN/Wanhao-Duplicator-4/releases/latest) and extract it.
+[latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest) and extract it.
 It contains the app, the profile, test models and an `engine` folder ready for PrusaSlicer.
 
 **Or** clone the source:
 
 ```powershell
-git clone https://github.com/M2C-ARUN/Wanhao-Duplicator-4.git
+git clone https://github.com/arunranga247/Wanhao-Duplicator-4.git
 cd Wanhao-Duplicator-4
 ```
 
@@ -315,7 +315,7 @@ python make_vase.py --height 35 --twist 120 --lobes 8
 <table>
 <tr>
 <td width="120" align="center">
-<img src="https://github.com/M2C-ARUN.png" width="96" alt="ARUN"><br>
+<img src="https://github.com/arunranga247.png" width="96" alt="ARUN"><br>
 </td>
 <td>
 
@@ -324,8 +324,8 @@ python make_vase.py --height 35 --twist 120 --lobes 8
 It brings a reliable, modern workflow to the Wanhao Duplicator 4, from 3D model to finished part, by
 combining a proven slicing engine with software written specifically for this printer and its hardware.
 
-- GitHub: [M2C-ARUN](https://github.com/M2C-ARUN)
-- Repository: [Wanhao-Duplicator-4](https://github.com/M2C-ARUN/Wanhao-Duplicator-4)
+- GitHub: [arunranga247](https://github.com/arunranga247)
+- Repository: [Wanhao-Duplicator-4](https://github.com/arunranga247/Wanhao-Duplicator-4)
 
 </td>
 </tr>
