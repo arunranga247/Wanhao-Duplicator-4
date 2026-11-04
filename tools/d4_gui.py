@@ -567,7 +567,7 @@ class App(tk.Tk):
             ttk.Label(nm, text=name, font=("Segoe UI Semibold", 10)).pack(anchor="w")
             self.t_tgt[key] = ttk.Label(nm, text="off", style="Dim.TLabel")
             self.t_tgt[key].pack(anchor="w")
-            self.t_lbl[key] = ttk.Label(f, text="---°", style="Big.TLabel", width=5, anchor="e")
+            self.t_lbl[key] = ttk.Label(f, text="---°", style="Big.TLabel", width=4, anchor="e")
             self.t_lbl[key].grid(row=r0, column=2, padx=(4, 10))
             e = ttk.Spinbox(f, from_=0, to=(240 if key != "bed" else 110), width=4, increment=5)
             e.set(default)
@@ -731,7 +731,7 @@ class App(tk.Tk):
                           font=("Segoe UI", 11))
         cb.pack(fill="x")
         cb.bind("<<ComboboxSelected>>", lambda e: self._build_params())
-        self.obj_desc = ttk.Label(f, text="", style="Dim.TLabel", wraplength=500, justify="left")
+        self.obj_desc = ttk.Label(f, text="", style="Dim.TLabel", wraplength=430, justify="left")
         self.obj_desc.pack(fill="x", pady=(6, 0))
 
         self.param_panel = self._panel(left, "2. Settings")
