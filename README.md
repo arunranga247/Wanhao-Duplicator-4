@@ -14,6 +14,8 @@ dual-extruder printer handled automatically.
 ![Slicer](https://img.shields.io/badge/Slicer-PrusaSlicer%202.9.6-EA4335)
 ![Version](https://img.shields.io/badge/version-1.0.0-1A73E8)
 
+**[⬇ Download the latest release](https://github.com/M2C-ARUN/Wanhao-Duplicator-4/releases/latest)**
+
 <img src="docs/images/prepare.png" alt="Duplicator 4 Studio - Prepare tab with a sliced model" width="900">
 
 </div>
@@ -99,6 +101,12 @@ flowchart LR
 ## 🚀 Installation
 
 ### 1. Get the project
+
+**Easiest:** download **Duplicator4Studio-v1.0.0-windows.zip** from the
+[latest release](https://github.com/M2C-ARUN/Wanhao-Duplicator-4/releases/latest) and extract it.
+It contains the app, the profile, test models and an `engine` folder ready for PrusaSlicer.
+
+**Or** clone the source:
 
 ```powershell
 git clone https://github.com/M2C-ARUN/Wanhao-Duplicator-4.git
