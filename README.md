@@ -47,7 +47,7 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 
 ## ✨ Features
 
-| | |
+| Feature | What it does |
 |---|---|
 | 📦 **Print any 3D model** | STL, 3MF, OBJ and AMF are sliced by the PrusaSlicer engine with a tuned Duplicator 4 PLA profile: walls, solid top and bottom, infill, brim and optional supports |
 | 🧩 **Built-in demo prints** | Twisted flower vase (spiral "vase mode"), square blocks, two-colour R+L cubes, left-extruder air demo |
@@ -91,7 +91,7 @@ flowchart LR
 
 ## 📋 Requirements
 
-| | |
+| Item | Requirement |
 |---|---|
 | Printer | Wanhao Duplicator 4 (Replicator 1 Dual class), Sailfish 7.x firmware, USB connection |
 | Computer | Windows 10 or 11 |
@@ -147,12 +147,19 @@ Windows installs the USB driver automatically. The printer appears in Device Man
 
 ```powershell
 .\Duplicator4Studio.exe --selftest
-type output\selftest.txt      # last line: OVERALL: PASS
 ```
+
+The result is written to `output\selftest.txt` in the app's data folder. The last line must be
+**OVERALL: PASS**.
+
+| You run | Data folder (print files, settings, logs) |
+|---|---|
+| The release download (.exe) | `Documents\Duplicator4Studio\` |
+| A clone of this repository | The repository folder itself |
 
 ### Start the app
 
-| | |
+| Way | How to start it |
 |---|---|
 | Executable | Double-click **`Duplicator4Studio.exe`** (or a desktop shortcut to it) |
 | From source | `D4_Control.bat` or `pythonw tools\d4_gui.py` |
@@ -322,7 +329,7 @@ If Duplicator 4 Studio brought your printer back to life or saved you time, here
 <a href="https://github.com/arunranga247"><img src="https://img.shields.io/github/followers/arunranga247?style=social" alt="Follow arunranga247"></a>
 </p>
 
-| | How |
+| Way to help | How |
 |---|---|
 | ⭐ **Star the repository** | Click **Star** at the top of the [repository page](https://github.com/arunranga247/Wanhao-Duplicator-4). It helps other Duplicator 4 owners find the project. |
 | 🐛 **Report a bug or suggest an idea** | Open an [issue](https://github.com/arunranga247/Wanhao-Duplicator-4/issues/new) with your printer, firmware version and what happened |
