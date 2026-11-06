@@ -1,11 +1,13 @@
 <div align="center">
 
-# 🖨️ Duplicator 4 Studio
+# 🖨️ Duplicator 4 Studio: Wanhao Duplicator 4 Software
 
-**Slice, control and print on the Wanhao Duplicator 4, from one modern Windows app.**
+**Wanhao Duplicator 4 software for Windows: a Duplicator 4 slicer, printer control and USB printing in one modern app.**
 
-Open any 3D model, slice it with a proven engine and print it over USB, with every quirk of this
-dual-extruder printer handled automatically.
+Open any 3D model (STL, 3MF, OBJ), slice it with the PrusaSlicer engine and print it over USB as
+**Sailfish x3g**, with every quirk of this dual-extruder printer handled automatically.
+Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
+**MakerBot Replicator 1 Dual** clones use the same Sailfish x3g system.
 
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
@@ -16,7 +18,7 @@ dual-extruder printer handled automatically.
 
 **[⬇ Download the latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest)**
 
-<img src="docs/images/prepare.png" alt="Duplicator 4 Studio - Prepare tab with a sliced model" width="900">
+<img src="docs/images/prepare.png" alt="Wanhao Duplicator 4 software - Duplicator 4 slicer with a sliced 3D model" width="900">
 
 </div>
 
