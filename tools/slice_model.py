@@ -38,6 +38,8 @@ ap.add_argument("--first-temp", type=int, default=220)
 ap.add_argument("--z-offset", type=float, default=-0.05)
 ap.add_argument("--color-z", type=float, default=0.0,
                 help="two colours: layers above this height (mm) use the OTHER extruder (0 = off)")
+ap.add_argument("--fast", type=int, default=0,
+                help="1 = faster speeds for simple parts (boxes, brackets), melt rate capped at 8 mm3/s")
 ap.add_argument("--prusaslicer", default=None)
 a = ap.parse_args()
 
@@ -69,6 +71,11 @@ with tempfile.TemporaryDirectory() as tmp:
            "--output", gcode]
     if a.supports >= 0.5:
         cmd += ["--support-material", "--support-material-auto"]
+    if a.fast:
+        # ~35-45 % quicker; the volumetric cap keeps the hot end from running out of melt
+        cmd += ["--perimeter-speed", "45", "--external-perimeter-speed", "32", "--infill-speed", "60",
+                "--solid-infill-speed", "45", "--top-solid-infill-speed", "28", "--gap-fill-speed", "30",
+                "--small-perimeter-speed", "20", "--bridge-speed", "30", "--max-volumetric-speed", "8"]
     cmd.append(model)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=900,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

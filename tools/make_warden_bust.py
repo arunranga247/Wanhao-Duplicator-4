@@ -402,9 +402,12 @@ def bust():
     return tris
 
 
-def _render_view(tris, W, H, sc, z_center, color_z, yaw_deg=180 - 24, pitch_deg=10):
+def _render_view(tris, W, H, sc, z_center, color_z, yaw_deg=180 - 24, pitch_deg=10, smooth_cos=0.55):
     """Z-buffered, Lambert-shaded render: every pixel shows the surface nearest the camera,
-    so small details (eyes, nose, emblem) are never painted over."""
+    so small details (eyes, nose, emblem) are never painted over.
+    A triangle may carry its own colour as a 4th item: (a, b, c, (r, g, b)).
+    smooth_cos: faces meeting at a smaller angle than acos(smooth_cos) are shaded smoothly
+    (use ~0.95 for crisp mechanical parts)."""
     from PIL import Image
     yaw, pitch = math.radians(yaw_deg), math.radians(pitch_deg)
     L = (-0.45, -0.70, 0.55)                                  # light: front-left-top
@@ -429,7 +432,8 @@ def _render_view(tris, W, H, sc, z_center, color_z, yaw_deg=180 - 24, pitch_deg=
     # face normals + smooth vertex normals (smoothing only across gentle angles, so the
     # sculpted face is smooth while the pedestal / crest keep their sharp edges)
     faces, adj = [], {}
-    for t in tris:
+    for tt in tris:
+        t, tcol = tt[:3], (tt[3] if len(tt) > 3 else None)
         v = [view(p) for p in t]
         ux, uy, uz = (v[1][i] - v[0][i] for i in range(3))
         wx, wy, wz = (v[2][i] - v[0][i] for i in range(3))
@@ -439,24 +443,24 @@ def _render_view(tris, W, H, sc, z_center, color_z, yaw_deg=180 - 24, pitch_deg=
             continue
         fn = (nx / nl, ny / nl, nz / nl)
         keys = [(round(p[0], 4), round(p[1], 4), round(p[2], 4)) for p in t]
-        faces.append((t, v, fn, keys))
+        faces.append((t, v, fn, keys, tcol))
         for k in keys:
             adj.setdefault(k, []).append(fn)
 
     def corner_normal(k, fn):
         sx = sy_ = sz = 0.0
         for m in adj[k]:
-            if m[0] * fn[0] + m[1] * fn[1] + m[2] * fn[2] > 0.55:
+            if m[0] * fn[0] + m[1] * fn[1] + m[2] * fn[2] > smooth_cos:
                 sx += m[0]; sy_ += m[1]; sz += m[2]
         ln_ = math.sqrt(sx * sx + sy_ * sy_ + sz * sz) or 1
         return sx / ln_, sy_ / ln_, sz / ln_
 
-    for t, v, fn, keys in faces:
+    for t, v, fn, keys, tcol in faces:
         nx, ny, nz = fn
         if ny > 0.05:                                         # back face (camera at -y)
             continue
         zmid = sum(p[2] for p in t) / 3
-        base = (236, 236, 232) if zmid < color_z - 0.05 else (92, 97, 110)    # white / graphite
+        base = tcol or ((236, 236, 232) if zmid < color_z - 0.05 else (92, 97, 110))  # white / graphite
         na, nb, nc = (corner_normal(k, fn) for k in keys)
         s = [(W / 2 + q[0] * sc, H / 2 - q[2] * sc, q[1]) for q in v]
         x0 = max(0, int(min(q[0] for q in s))); x1 = min(W - 1, int(max(q[0] for q in s)) + 1)
