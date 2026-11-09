@@ -249,11 +249,27 @@ class Worker(threading.Thread):
     # ---- printing ----------------------------------------------------------
     def _stream_step(self):
         job = self.print_job
+        if job.get("heat_wait") is not None:
+            # the printer is executing a "wait for heat": send nothing more until it is hot,
+            # so progress / time left only start counting when printing really starts
+            if time.time() - job.get("heat_check", 0) < 0.5:
+                return
+            job["heat_check"] = time.time()
+            if not self.link.is_finished():
+                self.post("progress", job["i"], len(job["cmds"]), time.time() - job["t0"])
+                return
+            job["heat_wait"] = None
+            self.post("phase", "print", None)
         t_end = time.time() + 0.15
         while job["i"] < len(job["cmds"]) and time.time() < t_end:
-            r = self.link.send(job["cmds"][job["i"]])
+            c = job["cmds"][job["i"]]
+            r = self.link.send(c)
             if r[0] == s3g.OK:
                 job["i"] += 1
+                if c[0] == 135:                       # wait-for-heat command now queued
+                    job["heat_wait"] = c[1]
+                    self.post("phase", "heat", c[1])
+                    break
             elif r[0] == s3g.BUSY:
                 time.sleep(0.03)
                 break

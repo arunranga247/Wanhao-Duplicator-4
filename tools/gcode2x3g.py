@@ -73,7 +73,15 @@ def scan(lines):
     return {"bbox": (x0, y0, x1, y1), "zmax": zmax, "layers": layers, "temps": temps, "bed": bed}
 
 
-def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, log=print):
+STANDBY_C = 170          # second nozzle waits warm (PLA barely oozes) until its colour starts
+SWAP_LIFT_MM = 2.0       # lift before the extruder swap
+SWAP_PURGE_MM = 6.0      # purge of the new nozzle (in the air, in front of the part)
+
+
+def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, log=print,
+            color_z=None, tool2=None, temp2=None):
+    """color_z: print every layer ABOVE this height (mm) with tool2 (the other extruder).
+    One colour change per print -> clean two-colour parts on a dual-nozzle machine."""
     lines = open(gcode_path, encoding="utf-8", errors="replace").read().splitlines()
     info = scan(lines)
     if info["bed"] > 0:
@@ -102,9 +110,20 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     p.change_tool(0)
     p.home(z_fast=5.0, z_timeout=40)                  # slow Z homing - proven safe
     p.move(z=5.0, f=5.0)
+    two_colour = bool(color_z) and color_z > 0
+    if two_colour:
+        tool2 = (1 - tool) if tool2 is None else tool2
+        temp2 = int(temp2 or first_temp)
+        if color_z >= info["zmax"]:
+            raise ConvertError("colour change at Z %.2f mm is above the top of the model (%.2f mm)"
+                               % (color_z, info["zmax"]))
     p.set_temp(tool, first_temp)
+    if two_colour:
+        p.set_temp(tool2, STANDBY_C)                   # second colour waits warm, not hot
     p.wait_tool(tool)
-    p.change_tool(tool, shift=False)                  # head at the X end: next move goes direct
+    if two_colour:
+        p.wait_tool(tool2)                             # standby nozzle warm too: nothing heats mid-print
+    p.change_tool(tool, shift=False)                 # head at the X end: next move goes direct
 
     # prime line in front of the object (skipped if the object reaches the front edge)
     py = min(-66.0, (y0 - CY) - 6.0)
@@ -127,11 +146,33 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     x, y, z = p.pos[0] + CX, p.pos[1] + CY, None
     layer = 0
     warned = set()
+    active = tool
+    swapped = False
+    purge_y = min(-62.0, (y0 - CY) - 10.0)
     for ln in lines:
         if ln.startswith(";LAYER_CHANGE"):
             layer += 1
             if info["layers"]:
                 p.percent(min(99, round(100 * layer / info["layers"])))
+            continue
+        if two_colour and not swapped and ln.startswith(";Z:"):
+            if float(ln[3:]) > color_z + 1e-6:
+                # ---- colour change: first extruder done, second extruder takes over ----
+                p.comment("colour change at Z %.2f: tool %d -> tool %d" % (color_z, active, tool2))
+                p.move(de=-2.0, f=25.0)                       # retract the first colour
+                p.move(z=p.pos[2] + SWAP_LIFT_MM, f=10.0)     # lift clear of the part
+                p.set_temp(tool2, temp2)
+                p.wait_tool(tool2)
+                p.set_temp(active, 0)                         # first colour is finished
+                p.change_tool(tool2)                          # head shifts by the nozzle spacing
+                active = tool2
+                px = -45.0 if tool2 == 1 else 45.0            # in front of the part, own spot
+                p.move(px, purge_y, f=60.0)
+                p._cmd(struct.pack("<BI", 133, 3000), "G4 P3000 ; settle the new nozzle")
+                p.move(de=SWAP_PURGE_MM, f=2.0)               # purge (falls on the bed)
+                p.move(px + (12.0 if px < 0 else -12.0), purge_y, f=80.0)   # wipe: snap the strand
+                swapped = True
+                x, y = p.pos[0] + CX, p.pos[1] + CY
             continue
         cmd, w = parse(ln)
         if cmd is None:
@@ -185,9 +226,9 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
                 last_e = w["E"]
         elif cmd in ("M104", "M109"):
             if "S" in w:
-                p.set_temp(tool, int(w["S"]))
+                p.set_temp(active, int(w["S"]))
                 if cmd == "M109":
-                    p.wait_tool(tool)
+                    p.wait_tool(active)
         elif cmd == "G4":
             ms = int(w.get("P", 0) + w.get("S", 0) * 1000)
             if ms > 0:
@@ -219,7 +260,9 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     with open(out_path, "wb") as fh:
         fh.write(p.x3g)
     return {"layers": info["layers"], "zmax": info["zmax"], "commands": p.ncmd,
-            "filament": p.e[tool], "time_s": p.time_s, "temp": first_temp,
+            "filament": p.e[tool] + (p.e[tool2] if two_colour else 0.0),
+            "filament_by_tool": tuple(p.e), "time_s": p.time_s, "temp": first_temp,
+            "two_colour": two_colour, "swapped": swapped,
             "bbox": (x0 - CX, y0 - CY, x1 - CX, y1 - CY)}
 
 
@@ -230,8 +273,11 @@ if __name__ == "__main__":
     ap.add_argument("--tool", choices=("left", "right"), default="left")
     ap.add_argument("--z-offset", type=float, default=0.0)
     ap.add_argument("--no-prime", action="store_true")
+    ap.add_argument("--color-z", type=float, default=0.0,
+                    help="layers above this height (mm) print with the OTHER extruder (0 = off)")
+    ap.add_argument("--temp2", type=int, default=None, help="temperature of the second extruder")
     a = ap.parse_args()
     r = convert(a.gcode, a.out, tool=0 if a.tool == "right" else 1, z_offset=a.z_offset,
-                prime=not a.no_prime)
+                prime=not a.no_prime, color_z=a.color_z or None, temp2=a.temp2)
     print("wrote %s: %d layers, %.1f mm tall, %d commands, %.0f mm filament, ~%.0f min"
           % (a.out, r["layers"], r["zmax"], r["commands"], r["filament"], r["time_s"] / 60))

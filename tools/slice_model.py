@@ -36,6 +36,8 @@ ap.add_argument("--scale", type=float, default=100, help="percent")
 ap.add_argument("--temp", type=int, default=210)
 ap.add_argument("--first-temp", type=int, default=220)
 ap.add_argument("--z-offset", type=float, default=-0.05)
+ap.add_argument("--color-z", type=float, default=0.0,
+                help="two colours: layers above this height (mm) use the OTHER extruder (0 = off)")
 ap.add_argument("--prusaslicer", default=None)
 a = ap.parse_args()
 
@@ -75,7 +77,8 @@ with tempfile.TemporaryDirectory() as tmp:
         sys.exit("PrusaSlicer could not slice the model:\n" + "\n".join(msg[-8:]))
     try:
         res = convert(gcode, out_x3g, name=name, tool=0 if a.only == "right" else 1,
-                      z_offset=a.z_offset, log=lambda m: print(m))
+                      z_offset=a.z_offset, log=lambda m: print(m),
+                      color_z=a.color_z if a.color_z > 0 else None, temp2=a.temp)
     except ConvertError as e:
         sys.exit("Conversion refused: %s" % e)
     # keep a copy of the G-code next to the x3g (handy for checking in a G-code viewer)
@@ -86,5 +89,10 @@ x0, y0, x1, y1 = res["bbox"]
 print("wrote %s" % out_x3g)
 print("  %d layers, %.1f mm tall, footprint %.0f x %.0f mm, %s extruder, %d C"
       % (res["layers"], res["zmax"], x1 - x0, y1 - y0, a.only, res["temp"]))
+if res.get("two_colour"):
+    other = "left" if a.only == "right" else "right"
+    fr, fl = res["filament_by_tool"]
+    print("  two colours: %s extruder up to Z %.2f mm, then %s extruder  (filament R %.0f / L %.0f mm)"
+          % (a.only, a.color_z, other, fr, fl))
 print("  filament %.0f mm (~%.1f g PLA), est. %.0f min after heat-up"
       % (res["filament"], res["filament"] * 2.405 * 1.24 / 1000, res["time_s"] / 60))
