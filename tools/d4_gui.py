@@ -101,7 +101,10 @@ OBJECTS = {
         "desc": "Any 3D design (Paint 3D, Tinkercad, Thingiverse …) sliced by the PrusaSlicer "
                 "engine with the Duplicator 4 profile. Layer 0.1 fine · 0.2 normal · 0.3 draft. "
                 "Squish: negative = first layer closer to the bed. Colour Z: above this height "
-                "the OTHER extruder prints (two colours, 0 = off).",
+                "the OTHER extruder prints (two colours, 0 = off). Fast 1: ~40 % quicker for "
+                "simple parts like boxes and brackets (keep 0 for detailed figures). "
+                "🔍 Fit check: will it print well (3-D report). 🧩 Assembly: do several parts "
+                "(e.g. a box + the boards inside) collide?",
         "params": [("layer-height", "Layer (mm)", 0.2, 0.1, 0.3, 0.05),
                    ("infill", "Infill (%)", 20, 0, 100, 5),
                    ("walls", "Walls", 3, 1, 6, 1),
@@ -111,7 +114,8 @@ OBJECTS = {
                    ("temp", "Nozzle °C", 210, 180, 240, 5),
                    ("first-temp", "1st layer °C", 220, 180, 240, 5),
                    ("z-offset", "Squish (mm)", -0.05, -0.3, 0.3, 0.02),
-                   ("color-z", "Colour Z (mm)", 0, 0, 140, 0.1)]},
+                   ("color-z", "Colour Z (mm)", 0, 0, 140, 0.1),
+                   ("fast", "Fast 0/1", 0, 0, 1, 1)]},
     "Twisted flower vase": {
         "script": "make_vase.py", "name": "TWIST_VASE", "extruder": False, "fixed": [],
         "desc": "6-lobed vase that twists and bulges. Brim + solid spiral base, then one "
@@ -787,6 +791,10 @@ class App(tk.Tk):
             ttk.Entry(mf, textvariable=self.model_var).pack(side="left", fill="x", expand=True)
             GButton(mf, "📂 Browse…", self.pick_model, kind="tonal", size=10, padx=12, pady=4).pack(
                 side="left", padx=(6, 0))
+            GButton(mf, "🔍 Fit check", self.fit_check, kind="tonal", size=10, padx=12, pady=4).pack(
+                side="left", padx=(6, 0))
+            GButton(mf, "🧩 Assembly…", self.fit_check_assembly, kind="tonal", size=10, padx=12, pady=4).pack(
+                side="left", padx=(6, 0))
             r0 = 1
         params = obj["params"]
         two_col = len(params) > 5                       # long lists: two columns, no range hints
@@ -827,6 +835,68 @@ class App(tk.Tk):
             base = "".join(ch for ch in base if ch.isalnum() or ch in "_-")[:24] or "MODEL"
             self.gen_name.delete(0, "end")
             self.gen_name.insert(0, base)
+
+    # ---- fit check: printability of one design, or collisions between assembled parts --------
+    def fit_check(self, files=None):
+        if not files:
+            m = self.model_var.get().strip().strip('"')
+            if not os.path.isfile(m):
+                messagebox.showinfo("Fit check", "Choose a 3D model file first (📂 Browse…).\n\n"
+                                    "To check several parts together (for example a box and the boards "
+                                    "inside it), use 🧩 Assembly….")
+                return
+            files = [m]
+        args = list(files)
+        if len(files) == 1:                             # check with the settings shown on screen
+            for flag in ("supports", "brim", "scale"):
+                if flag in self.param_widgets:
+                    try:
+                        args += ["--" + flag, "%g" % float(self.param_widgets[flag][0].get())]
+                    except ValueError:
+                        pass
+        args.append("--no-open")
+        what = os.path.basename(files[0]) if len(files) == 1 else "%d parts" % len(files)
+        self.gen_status.configure(text="🔍 Fit check of %s running …" % what, foreground=COL["dim"])
+        self.log("Fit check: %s" % ", ".join(os.path.basename(f) for f in files))
+        threading.Thread(target=self._fit_worker, args=(args,), daemon=True).start()
+
+    def fit_check_assembly(self):
+        files = filedialog.askopenfilenames(
+            title="Choose ALL parts of the assembly (exported in their assembled positions)",
+            initialdir=os.path.dirname(self.model_var.get()) if self.model_var.get() else d4_paths.MODELS,
+            filetypes=[("3D models", "*.stl *.3mf *.obj"), ("All files", "*.*")])
+        if files:
+            self.fit_check([os.path.normpath(f) for f in files])
+
+    def _fit_worker(self, args):
+        try:
+            code, sout, serr = run_tool("fit_check.py", args, timeout=900)
+        except Exception as e:                      # noqa: BLE001 - report anything to the user
+            code, sout, serr = 1, "", str(e)
+        self.events.put(("fit_done", code, sout or "", serr or ""))
+
+    def on_fit_done(self, code, sout, serr):
+        lines = sout.splitlines()
+        result = next((ln for ln in lines if ln.startswith("RESULT:")), None)
+        if result is None:
+            result = "RESULT: FAIL - fit check could not run: " + (serr.strip().splitlines() or ["?"])[-1][:200]
+        report = next((ln[len("REPORT: "):].strip() for ln in lines if ln.startswith("REPORT: ")), None)
+        verdict = result.split()[1]
+        issues = [ln.split(" ", 2)[2] for ln in lines
+                  if ln.startswith(("CHECK WARN", "CHECK FAIL", "PAIR WARN", "PAIR FAIL"))]
+        text = "%s Fit check: %s" % ({"OK": "✅", "WARN": "⚠"}.get(verdict, "❌"), result[len("RESULT: "):])
+        if issues:
+            text += "\n" + "\n".join("• " + i for i in issues[:6])
+        if report:
+            text += "\n3-D report opened in your browser."
+        self.gen_status.configure(text=text, foreground={"OK": COL["ok"], "WARN": COL["warn"]}.get(verdict, COL["r"]))
+        for ln in lines:
+            if ln.startswith(("CHECK", "PAIR", "RESULT")):
+                self.log(ln, "ok" if " OK " in ln or ln.startswith("RESULT: OK") else
+                         ("alarm" if "FAIL" in ln else None))
+        if report and os.path.exists(report):
+            import webbrowser
+            webbrowser.open("file:///" + os.path.abspath(report).replace("\\", "/"))
 
     def generate(self):
         obj = OBJECTS[self.obj_var.get()]
@@ -1554,6 +1624,14 @@ def selftest():
             lines.append("%-18s %s  %s" % (script, "PASS" if ok else "FAIL",
                                            (serr.strip() or sout.strip().splitlines()[-1:] or [""])[-1][:120]
                                            if not ok else ""))
+        # fit check (needs the bundled 3-D libraries + viewer)
+        if os.path.exists(model):
+            rep = os.path.join(tmp, "fit.html")
+            code, sout, serr = run_tool("fit_check.py", [model, "--no-open", "--out", rep])
+            ok = "RESULT:" in sout and os.path.exists(rep) and os.path.getsize(rep) > 100000
+            ok_all &= ok
+            lines.append("%-18s %s  %s" % ("fit_check.py", "PASS" if ok else "FAIL",
+                                           "" if ok else (serr.strip() or sout.strip())[-160:]))
     lines.append("OVERALL: %s" % ("PASS" if ok_all else "FAIL"))
     with open(os.path.join(d4_paths.OUT, "selftest.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")

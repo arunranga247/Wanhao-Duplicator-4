@@ -70,10 +70,16 @@ for py in glob.glob(os.path.join(TOOLS, "*.py")):
         datas += ["--add-data", py + sep + "tools"]
 datas += ["--add-data", os.path.join(PROJECT, "engine", "duplicator4_pla.ini") + sep + "engine",
           "--add-data", os.path.join(BUILD, "built_from.txt") + sep + "."]
+# fit check: 3-D report template + three.js (MIT, bundled so the report works offline)
+datas += ["--add-data", os.path.join(TOOLS, "fit_view_template.html") + sep + "tools"]
+for f in glob.glob(os.path.join(TOOLS, "vendor", "*")):
+    datas += ["--add-data", f + sep + os.path.join("tools", "vendor")]
 
 hidden = ["argparse", "runpy", "contextlib", "tempfile", "json", "math", "struct", "glob",
           "shutil", "winreg", "serial", "serial.tools.list_ports", "PIL.ImageTk", "PIL.ImageDraw",
-          "PIL.ImageFont", "sv_ttk"]
+          "PIL.ImageFont", "sv_ttk",
+          # fit_check.py (runs inside the exe): mesh maths + 3-D booleans
+          "numpy", "manifold3d", "base64", "webbrowser", "zipfile", "xml.etree.ElementTree"]
 args = ["--noconfirm", "--clean", "--onefile", "--windowed",
         "--name", "Duplicator4Studio",
         "--icon", ico,

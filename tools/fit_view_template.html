@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fit Check - Duplicator 4 Studio</title>
+<style>
+/* Layout: bench inspection sheet - 3-D stage on the left, verdict + checks + controls on the right */
+:root {
+  --bg: #edf0f2; --panel: #f9fafb; --stage: #e2e7ec; --ink: #18202a; --muted: #5b6672;
+  --line: #d3d9df; --edge: #1d242d; --accent: #d9480f;
+  --ok: #2b8a3e; --ok-bg: #e3f4e6; --warn: #9a6200; --warn-bg: #fbf0d9; --bad: #c92a2a; --bad-bg: #fbe3e3;
+  --f-display: "Bahnschrift", "Segoe UI Semibold", "Arial Narrow", sans-serif;
+  --f-body: "Segoe UI", system-ui, sans-serif;
+  --f-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --panel: #161b22; --stage: #11161c; --ink: #e3e8ee; --muted: #93a0ad;
+    --line: #2a323c; --edge: #c9d3dd; --accent: #ff7a3d;
+    --ok: #63d77a; --ok-bg: #15301c; --warn: #f2b544; --warn-bg: #33270e; --bad: #ff6b6b; --bad-bg: #3a1717;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --panel: #161b22; --stage: #11161c; --ink: #e3e8ee; --muted: #93a0ad;
+  --line: #2a323c; --edge: #c9d3dd; --accent: #ff7a3d;
+  --ok: #63d77a; --ok-bg: #15301c; --warn: #f2b544; --warn-bg: #33270e; --bad: #ff6b6b; --bad-bg: #3a1717;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.45;
+  padding: 18px max(16px, env(safe-area-inset-right, 0px)) 28px max(16px, env(safe-area-inset-left, 0px)); }
+.wrap { max-width: 1360px; margin: 0 auto; display: grid; gap: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 20px; }
+h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(1.5rem, 3vw, 2.1rem); margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 2px 0 0; }
+.brand { font-family: var(--f-mono); font-size: .8rem; color: var(--muted); }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+@media (max-width: 920px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.stage { position: relative; background: var(--stage); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  aspect-ratio: 4 / 3; max-height: 80vh; width: 100%; }
+@media (max-width: 600px) { .stage { aspect-ratio: 1 / 1; } }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.hint { position: absolute; left: 12px; bottom: 10px; font-size: .8rem; color: var(--muted); pointer-events: none; }
+.views { position: absolute; right: 10px; top: 10px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+button.v { font: 500 .8rem var(--f-body); color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button.v:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+aside { display: grid; gap: 14px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.verdict .big { font-family: var(--f-display); font-weight: 700; font-size: 1.45rem; display: flex; align-items: center; gap: 10px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.dot.OK { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-bg); }
+.dot.WARN { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-bg); }
+.dot.FAIL { background: var(--bad); box-shadow: 0 0 0 4px var(--bad-bg); }
+h2 { font-family: var(--f-display); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+ul.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+ul.checks li { display: grid; grid-template-columns: 52px 1fr; gap: 10px; align-items: start; }
+ul.checks b { font-weight: 600; }
+ul.checks span.msg { display: block; color: var(--muted); font-size: .86rem; }
+.chip { display: inline-block; text-align: center; font-size: .68rem; font-weight: 700; letter-spacing: .05em; padding: 2px 0; border-radius: 999px; width: 52px; }
+.chip.OK { color: var(--ok); background: var(--ok-bg); }
+.chip.WARN { color: var(--warn); background: var(--warn-bg); }
+.chip.FAIL { color: var(--bad); background: var(--bad-bg); }
+.chip.TOUCH { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--line); padding: 4px 6px; }
+td { border-bottom: 1px solid var(--line); padding: 5px 6px; }
+td.n, th.n { text-align: right; font-family: var(--f-mono); font-size: .8rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.parts { display: grid; gap: 4px; margin-bottom: 10px; }
+.parts label, .opts label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: .9rem; }
+.opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+.sw { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+.row2 { display: grid; gap: 4px; margin-top: 12px; }
+.row2 .lab { font-size: .9rem; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.row2 output { font-family: var(--f-mono); font-size: .8rem; color: var(--muted); }
+select { font: inherit; font-size: .85rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.err { padding: 20px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="title">Fit Check</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div class="brand">Duplicator 4 Studio · fit check</div>
+  </header>
+  <div class="main">
+    <div class="stage" id="stage">
+      <canvas id="cv" aria-label="3-D view of the design"></canvas>
+      <div class="views">
+        <button class="v" id="vIso" type="button">3/4 view</button>
+        <button class="v" id="vTop" type="button">Top</button>
+        <button class="v" id="vFront" type="button">Front</button>
+      </div>
+      <div class="hint">Drag to rotate · scroll to zoom · right-drag to pan</div>
+    </div>
+    <aside>
+      <section class="card verdict">
+        <div class="big"><span class="dot" id="vdot"></span><span id="vtext"></span></div>
+      </section>
+      <section class="card">
+        <h2 id="chkTitle">Checks</h2>
+        <ul class="checks" id="checks"></ul>
+      </section>
+      <section class="card" id="pairCard" hidden>
+        <h2>Every pair of parts</h2>
+        <div class="tbl"><table>
+          <thead><tr><th>Parts</th><th class="n">overlap</th><th class="n">gap</th><th></th></tr></thead>
+          <tbody id="pairs"></tbody>
+        </table></div>
+        <p class="sub" style="font-size:.8rem;margin:8px 0 0">TOUCH = parts rest on each other (fine) · WARN = gap under 0.2 mm, fine for clips and press fits, otherwise add clearance · HITS = parts overlap, change the design</p>
+      </section>
+      <section class="card">
+        <h2>Show</h2>
+        <div class="parts" id="partList"></div>
+        <div class="opts">
+          <label><input type="checkbox" id="tGhost">See-through</label>
+          <label id="lOver"><input type="checkbox" id="tOver" checked>Overhangs in red</label>
+          <label id="lThin"><input type="checkbox" id="tThin" checked>Thin spots</label>
+          <label id="lBed"><input type="checkbox" id="tBed" checked>Printer bed</label>
+        </div>
+        <div class="row2">
+          <div class="lab"><span>Section cut <select id="secAxis"><option value="">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></span><output id="secOut"></output></div>
+          <input type="range" id="secPos" min="0" max="1" step="0.002" value="0.5" disabled>
+        </div>
+        <div class="row2" id="exRow" hidden>
+          <div class="lab"><span>Explode</span><output id="exOut">0 mm</output></div>
+          <input type="range" id="explode" min="0" max="1" step="0.01" value="0">
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+<script>/*__THREE__*/</script>
+<script>/*__ORBIT__*/</script>
+<script>
+const D = __DATA__;
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+const single = D.mode === "single";
+document.title = D.title + " - Fit Check";
+$("title").textContent = D.title;
+$("sub").textContent = single ? "Printability check for the Duplicator 4 (bed 225 × 145 mm, height 140 mm, 0.4 mm nozzle)"
+                              : D.parts.length + " parts in their assembled positions - every pair measured for overlap and gap";
+$("vdot").className = "dot " + D.verdict;
+$("vtext").textContent = { OK: single ? "Ready to print" : "All parts fit", WARN: "Look at the yellow items",
+                           FAIL: single ? "Fix before printing" : "Parts collide" }[D.verdict];
+$("chkTitle").textContent = single ? "Printability" : "Parts";
+$("checks").innerHTML = D.checks.map(c => `<li><span class="chip ${c.status}">${c.status}</span><div><b>${esc(c.title)}</b><span class="msg">${esc(c.msg)}</span></div></li>`).join("");
+if (!single) {
+  $("pairCard").hidden = false;
+  $("pairs").innerHTML = D.pairs.map(p => `<tr><td>${esc(p.a)} ↔ ${esc(p.b)}</td><td class="n">${p.overlap === null ? "?" : p.overlap.toFixed(3) + " mm³"}</td><td class="n">${p.gap === null ? "?" : (p.gap >= 10 ? "≥ 10" : p.gap.toFixed(2)) + " mm"}</td><td><span class="chip ${p.status}">${p.status === "FAIL" ? "HITS" : p.status}</span></td></tr>`).join("");
+  $("exRow").hidden = false; $("lOver").hidden = true; $("lBed").hidden = true;
+  $("tOver").checked = false; $("tBed").checked = false; $("tGhost").checked = D.parts.length > 1;
+}
+$("partList").innerHTML = D.parts.map((p, i) => `<label><input type="checkbox" data-i="${i}" checked><span class="sw" style="background:${p.color}"></span>${esc(p.name)}</label>`).join("");
+if (!D.parts.some(p => p.thin.length)) $("lThin").hidden = true;
+
+function bytes(b) { const s = atob(b); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u.buffer; }
+
+if (!window.THREE || !THREE.OrbitControls) {
+  $("stage").innerHTML = '<p class="err">The 3-D view could not start in this browser. The checks on the right are complete.</p>';
+} else {
+  const cv = $("cv"), stage = $("stage");
+  const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.localClippingEnabled = true;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(32, 4 / 3, 0.5, 5000);
+  const controls = new THREE.OrbitControls(camera, cv);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x3a4450, 0.85));
+  const key = new THREE.DirectionalLight(0xffffff, 0.75); key.position.set(80, 140, 110); scene.add(key);
+  const rim = new THREE.DirectionalLight(0xffffff, 0.3); rim.position.set(-120, 40, -90); scene.add(rim);
+  const outer = new THREE.Group(); outer.rotation.x = -Math.PI / 2; scene.add(outer);     // model is z-up (mm)
+
+  // parts --------------------------------------------------------------------------------
+  const box = new THREE.Box3();
+  const parts = D.parts.map((p, idx) => {
+    const pos = new Float32Array(bytes(p.v)), ind = new Uint32Array(bytes(p.i));
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setIndex(new THREE.BufferAttribute(ind, 1));
+    g.computeBoundingBox(); box.union(g.boundingBox);
+    const mat = new THREE.MeshStandardMaterial({ color: p.color, roughness: 0.6, metalness: 0.05, flatShading: true, side: THREE.DoubleSide });
+    const holder = new THREE.Group();
+    holder.add(new THREE.Mesh(g, mat));
+    const ntri = ind.length / 3;
+    if (ntri < 80000) {
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 30),
+        new THREE.LineBasicMaterial({ color: new THREE.Color(css("--edge")), transparent: true, opacity: 0.45 }));
+      holder.add(edges); holder.userData.edges = edges;
+    }
+    // overhangs: faces pointing down more than 45 deg, not on the bed
+    const ov = [];
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+    for (let t = 0; t < ind.length; t += 3) {
+      a.fromArray(pos, ind[t] * 3); b.fromArray(pos, ind[t + 1] * 3); c.fromArray(pos, ind[t + 2] * 3);
+      n.subVectors(b, a).cross(c.clone().sub(a)).normalize();
+      if (n.z < -0.707 && Math.min(a.z, b.z, c.z) > 0.3) ov.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    }
+    if (ov.length) {
+      const og = new THREE.BufferGeometry(); og.setAttribute("position", new THREE.Float32BufferAttribute(ov, 3));
+      const om = new THREE.Mesh(og, new THREE.MeshBasicMaterial({ color: 0xe03131, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+      holder.add(om); holder.userData.over = om;
+    }
+    if (p.thin.length) {
+      const sg = new THREE.SphereGeometry(0.45, 10, 8);
+      const im = new THREE.InstancedMesh(sg, new THREE.MeshBasicMaterial({ color: 0xff8c00 }), p.thin.length);
+      const m4 = new THREE.Matrix4();
+      p.thin.forEach((t, k) => { m4.makeTranslation(t[0], t[1], t[2]); im.setMatrixAt(k, m4); });
+      holder.add(im); holder.userData.thin = im;
+    }
+    holder.userData.mat = mat;
+    outer.add(holder);
+    return holder;
+  });
+  const size = new THREE.Vector3(), centre = new THREE.Vector3();
+  box.getSize(size); box.getCenter(centre);
+  const span = Math.max(size.x, size.y, size.z, 10);
+
+  // printer bed (single design) ------------------------------------------------------------
+  const bed = new THREE.Group();
+  if (single) {
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(D.bed[0], D.bed[1]),
+      new THREE.MeshStandardMaterial({ color: 0x8e99a6, roughness: 0.9, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+    plate.position.z = -0.05; bed.add(plate);
+    const lines = [];
+    for (let x = -D.bed[0] / 2; x <= D.bed[0] / 2 + 0.01; x += 25) lines.push(x, -D.bed[1] / 2, 0, x, D.bed[1] / 2, 0);
+    for (let y = -D.bed[1] / 2; y <= D.bed[1] / 2 + 0.01; y += 25) lines.push(-D.bed[0] / 2, y, 0, D.bed[0] / 2, y, 0);
+    const lg = new THREE.BufferGeometry(); lg.setAttribute("position", new THREE.Float32BufferAttribute(lines, 3));
+    bed.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x6c7682, transparent: true, opacity: 0.5 })));
+    outer.add(bed);
+  }
+
+  // controls ---------------------------------------------------------------------------------
+  const plane = new THREE.Plane();
+  let secAxis = "", secT = 0.5, explode = 0, ghost = $("tGhost").checked;
+  const allMats = () => {
+    const m = [];
+    parts.forEach(h => h.children.forEach(ch => { if (ch.material) m.push(ch.material); }));
+    return m;
+  };
+  function applySection() {
+    outer.updateMatrixWorld(true);
+    $("secPos").disabled = !secAxis;
+    if (secAxis) {
+      const k = { x: "x", y: "y", z: "z" }[secAxis];
+      const lo = box.min[k], hi = box.max[k], v = lo + (hi - lo) * secT;
+      const nrm = new THREE.Vector3(k === "x" ? -1 : 0, k === "y" ? -1 : 0, k === "z" ? -1 : 0);
+      plane.set(nrm, v).applyMatrix4(outer.matrixWorld);
+      $("secOut").textContent = `${secAxis.toUpperCase()} = ${v.toFixed(1)} mm`;
+    } else $("secOut").textContent = "";
+    allMats().forEach(m => { m.clippingPlanes = secAxis ? [plane] : []; m.needsUpdate = true; });
+  }
+  function applyGhost() {
+    parts.forEach(h => { const m = h.userData.mat; m.transparent = ghost; m.opacity = ghost ? 0.28 : 1; m.depthWrite = !ghost; m.needsUpdate = true; });
+  }
+  function applyExplode() {
+    parts.forEach((h, i) => {
+      const g = h.children[0].geometry; const c = new THREE.Vector3(); g.boundingBox.getCenter(c);
+      const d = c.sub(centre); if (d.length() < 1e-3) d.set(0, 0, i - (parts.length - 1) / 2); d.normalize();
+      h.position.copy(d.multiplyScalar(explode * span * 0.6));
+    });
+    $("exOut").textContent = `${Math.round(explode * span * 0.6)} mm`;
+  }
+  function applyVisible() {
+    document.querySelectorAll("#partList input").forEach(cb => parts[+cb.dataset.i].visible = cb.checked);
+    parts.forEach(h => {
+      if (h.userData.over) h.userData.over.visible = $("tOver").checked;
+      if (h.userData.thin) h.userData.thin.visible = $("tThin").checked;
+    });
+    bed.visible = $("tBed").checked;
+  }
+  function themeColors() {
+    scene.background = new THREE.Color(css("--stage"));
+    parts.forEach(h => { if (h.userData.edges) h.userData.edges.material.color = new THREE.Color(css("--edge")); });
+  }
+  function setView(kind) {
+    const d = span * 2.4 + 20;
+    const cz = size.z / 2;
+    if (kind === "top") camera.position.set(0, d, 0.01);
+    else if (kind === "front") camera.position.set(0, cz, d);
+    else camera.position.set(d * 0.55, d * 0.55 + cz, d * 0.65);
+    controls.target.set(0, cz, 0); controls.update(); render();
+  }
+  outer.position.set(-centre.x, 0, centre.y);                    // centre the view (outer is rotated)
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    renderer.setSize(r.width, r.height, false);
+    camera.aspect = r.width / Math.max(1, r.height); camera.updateProjectionMatrix(); render();
+  }
+  let queued = false;
+  function render() { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; renderer.render(scene, camera); }); }
+
+  document.querySelectorAll("#partList input").forEach(cb => cb.addEventListener("change", () => { applyVisible(); render(); }));
+  ["tOver", "tThin", "tBed"].forEach(id => $(id).addEventListener("change", () => { applyVisible(); render(); }));
+  $("tGhost").addEventListener("change", e => { ghost = e.target.checked; applyGhost(); render(); });
+  $("secAxis").addEventListener("change", e => { secAxis = e.target.value; applySection(); render(); });
+  $("secPos").addEventListener("input", e => { secT = +e.target.value; applySection(); render(); });
+  $("explode").addEventListener("input", e => { explode = +e.target.value; applyExplode(); render(); });
+  $("vIso").addEventListener("click", () => setView("iso"));
+  $("vTop").addEventListener("click", () => setView("top"));
+  $("vFront").addEventListener("click", () => setView("front"));
+  controls.addEventListener("change", render);
+  new ResizeObserver(resize).observe(stage);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { themeColors(); render(); });
+
+  applyGhost(); applyVisible(); applyExplode(); applySection(); themeColors(); setView("iso"); resize();
+}
+</script>
+</body>
+</html>

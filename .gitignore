@@ -12,3 +12,6 @@ tools/d4_settings.json
 output/*.txt
 output/.previews/
 output/*.png
+
+# fit check reports (recreated by the Fit check button)
+output/fitcheck_*.html
