@@ -169,6 +169,9 @@ def render(path, out=None):
     fy = 720
     d.rounded_rectangle((30, fy, W - 30, H - 20), 10, fill=PANEL)
     zs = sorted({round(sg[2], 2) for sg in segs if sg[7]})
+    ext = [sg for sg in segs if sg[7]]
+    # vase mode = most printing moves climb while they extrude (not just many layer heights)
+    spiral = bool(ext) and sum(1 for sg in ext if abs(sg[5] - sg[2]) > 1e-4) > 0.5 * len(ext)
     rows = [
         ("Commands", "%d" % info["n"]),
         ("Nozzle temps", ", ".join("%s %d °C" % kv for kv in sorted(info["temps"].items())) or "OFF"),
@@ -176,7 +179,7 @@ def render(path, out=None):
         ("Z homing", ("YES - slow, %.0f mm/s (safe)" % info["zspeed"] if info.get("zspeed", 99) <= 6 else
                       "YES - FAST %.0f mm/s (cut-out risk)" % info.get("zspeed", 0)) if info["zhome"] else
          ("NO - paper-test height = Z0, bed only moves DOWN" if info.get("zmoved") else "NO - bed never moves")),
-        ("Layers", ("spiral / vase mode, %.1f - %.1f mm" % (zs[0], zs[-1]) if len(zs) > 300 else
+        ("Layers", ("spiral / vase mode, %.1f - %.1f mm" % (zs[0], zs[-1]) if spiral else
                     "%d  (%.1f - %.1f mm)" % (len(zs), zs[0], zs[-1])) if zs else "none (dry run)"),
         ("Filament", "right %.0f mm,  left %.0f mm" % tuple(info["fil"])),
     ]

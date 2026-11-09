@@ -100,7 +100,8 @@ OBJECTS = {
         "script": "slice_model.py", "name": "MODEL", "extruder": True, "model": True, "fixed": [],
         "desc": "Any 3D design (Paint 3D, Tinkercad, Thingiverse …) sliced by the PrusaSlicer "
                 "engine with the Duplicator 4 profile. Layer 0.1 fine · 0.2 normal · 0.3 draft. "
-                "Squish: negative = first layer closer to the bed.",
+                "Squish: negative = first layer closer to the bed. Colour Z: above this height "
+                "the OTHER extruder prints (two colours, 0 = off).",
         "params": [("layer-height", "Layer (mm)", 0.2, 0.1, 0.3, 0.05),
                    ("infill", "Infill (%)", 20, 0, 100, 5),
                    ("walls", "Walls", 3, 1, 6, 1),
@@ -109,7 +110,8 @@ OBJECTS = {
                    ("scale", "Scale (%)", 100, 10, 500, 5),
                    ("temp", "Nozzle °C", 210, 180, 240, 5),
                    ("first-temp", "1st layer °C", 220, 180, 240, 5),
-                   ("z-offset", "Squish (mm)", -0.05, -0.3, 0.3, 0.02)]},
+                   ("z-offset", "Squish (mm)", -0.05, -0.3, 0.3, 0.02),
+                   ("color-z", "Colour Z (mm)", 0, 0, 140, 0.1)]},
     "Twisted flower vase": {
         "script": "make_vase.py", "name": "TWIST_VASE", "extruder": False, "fixed": [],
         "desc": "6-lobed vase that twists and bulges. Brim + solid spiral base, then one "
@@ -1144,8 +1146,10 @@ class App(tk.Tk):
             return
         self.print_stats = st
         self.printing = True
+        self.heat_phase = None
+        self.job_file = os.path.basename(path)
         self.prog.set(0)
-        self.job_name.configure(text=os.path.basename(path))
+        self.job_name.configure(text="⏳ Homing, then heating - " + self.job_file)
         for v in self.job_vals.values():
             v.configure(text="—")
         self.worker.submit("print", path)
@@ -1363,8 +1367,33 @@ class App(tk.Tk):
         self.job_vals["elapsed"].configure(text=fmt_min(elapsed))
         self.job_vals["left"].configure(text=fmt_min(left) if left is not None else "—")
 
+    def on_phase(self, kind, tool):
+        """Worker tells us the printer is waiting for heat (kind 'heat') or printing again."""
+        if kind == "heat":
+            self.heat_phase = tool
+            self._show_heat()
+            self.log("Heating the %s nozzle - printing starts when it is hot"
+                     % ("right" if tool == 0 else "left"))
+        else:
+            if self.heat_phase is not None:
+                self.log("Nozzle hot - printing", "ok")
+            self.heat_phase = None
+            self.job_name.configure(text="▶ Printing - " + getattr(self, "job_file", ""))
+
+    def _show_heat(self):
+        tool = getattr(self, "heat_phase", None)
+        if tool is None or not self.printing:
+            return
+        key = "r" if tool == 0 else "l"
+        t = getattr(self, "_last_temps", {}) or {}
+        cur, tgt = t.get(key), t.get(key + "_t")
+        side = "right" if tool == 0 else "left"
+        temp = " %s° → %s°" % (cur, tgt) if cur is not None and tgt else ""
+        self.job_name.configure(text="🔥 Heating %s nozzle%s - print starts when hot" % (side, temp))
+
     def on_print_done(self, ok, msg):
         self.printing = False
+        self.heat_phase = None
         self.job_name.configure(text=("✅ " if ok else "⚠ ") + msg)
         if ok:
             self.prog.set(1.0, color=COL["ok"])
@@ -1412,6 +1441,7 @@ class App(tk.Tk):
         self.status_temps.configure(text="R %s°C   L %s°C   bed %s°C   Z %.2f" % (
             t.get("r"), t.get("l"), t.get("bed"), p[2]))
         if self.printing:
+            self._show_heat()
             self.job_vals["z"].configure(text="%.2f mm" % p[2])
             self.job_vals["fil"].configure(text="R %.0f / L %.0f mm" % (max(0, p[3]), max(0, p[4])))
             self.job_vals["noz"].configure(text="R %s° / L %s°" % (t.get("r"), t.get("l")))
