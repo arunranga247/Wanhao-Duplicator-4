@@ -26,6 +26,10 @@ STOP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "STOP")
 OK, BUSY, CRC, CANCEL = 0x81, 0x82, 0x83, 0x89
 
 
+class Cancelled(Exception):
+    """The print was cancelled on the printer's LCD."""
+
+
 def crc8(data):
     crc = 0
     for b in data:
@@ -59,6 +63,7 @@ def log(msg):
 class Link:
     def __init__(self, port, baud=115200):
         self.sp = serial.Serial(port, baud, timeout=0.5)
+        self.z, self.sw = 0.0, "?"                  # last good position reading
         time.sleep(3)
         self.sp.reset_input_buffer()
 
@@ -90,15 +95,30 @@ class Link:
         out = []
         for t, q in ((0, 2), (1, 2), (0, 30)):
             r = self.send(bytes([10, t, q]))
-            out.append(struct.unpack("<h", r[1:3])[0] if r[0] == OK else None)
+            if r and r[0] == CANCEL:
+                raise Cancelled()
+            out.append(struct.unpack("<h", r[1:3])[0] if r and r[0] == OK and len(r) >= 3 else None)
         return out
 
     def abort(self):
         self.send(bytes([7]))
 
+    def heaters_off(self):
+        """Both nozzles and the bed to 0 C (sent after an abort, so they run at once)."""
+        for pkt in (struct.pack("<BBBBh", 136, 0, 3, 2, 0), struct.pack("<BBBBh", 136, 1, 3, 2, 0),
+                    struct.pack("<BBBBh", 136, 0, 31, 2, 0)):
+            try:
+                self.send(pkt)
+            except Exception:                       # noqa: BLE001 - best effort
+                pass
+
     def fed(self):
         """Filament fed by right/left extruder since last position reset (mm, + = in)."""
         r = self.send(bytes([21]))
+        if r and r[0] == CANCEL:
+            raise Cancelled()
+        if not r or r[0] != OK or len(r) < 23:
+            return None, None                       # garbled / short reply: skip this reading
         p = struct.unpack("<5i", r[1:21])
         self.z = p[2] / 400.0
         e = struct.unpack("<H", r[21:23])[0]
@@ -130,6 +150,7 @@ def main():
             if os.path.exists(STOP_FILE):
                 log("STOP file found -> ABORT")
                 link.abort()
+                link.heaters_off()
                 return 1
             r = link.send(cmds[i])
             if r[0] == OK:
@@ -137,37 +158,56 @@ def main():
             elif r[0] == BUSY:                      # printer buffer full -> wait
                 time.sleep(0.05)
             elif r[0] == CANCEL:
-                log("print cancelled on the printer")
-                return 1
+                raise Cancelled()
             else:
                 log("printer error 0x%02X on command %d -> ABORT" % (r[0], i))
                 link.abort()
+                link.heaters_off()
                 return 1
             if time.time() - last_log > 3:
                 t0, t1, bed = link.temps()
                 fa, fb = link.fed()
-                log("sent %d/%d (%d%%)  R %s C  L %s C  bed %s C  | fed R %.1f mm  L %.1f mm | Z %.2f  switches %s"
-                    % (i, len(cmds), 100 * i // len(cmds), t0, t1, bed, fa, fb, link.z, link.sw))
+                log("sent %d/%d (%d%%)  R %s C  L %s C  bed %s C  | fed R %s mm  L %s mm | Z %.2f  switches %s"
+                    % (i, len(cmds), 100 * i // len(cmds), t0, t1, bed, _mm(fa), _mm(fb), link.z, link.sw))
                 last_log = time.time()
         log("all commands sent, waiting for printer to finish")
         while True:
             if os.path.exists(STOP_FILE):
                 log("STOP file found -> ABORT")
                 link.abort()
+                link.heaters_off()
                 return 1
             r = link.send(bytes([11]))
             if r[0] == OK and r[1] == 1:
                 break
             t0, t1, bed = link.temps()
             fa, fb = link.fed()
-            log("finishing...  R %s C  L %s C  bed %s C  | fed R %.1f mm  L %.1f mm | Z %.2f  switches %s" % (t0, t1, bed, fa, fb, link.z, link.sw))
+            log("finishing...  R %s C  L %s C  bed %s C  | fed R %s mm  L %s mm | Z %.2f  switches %s"
+                % (t0, t1, bed, _mm(fa), _mm(fb), link.z, link.sw))
             time.sleep(2)
         log("PRINT COMPLETE in %.1f min" % ((time.time() - t_start) / 60))
         return 0
+    except Cancelled:
+        log("print cancelled on the printer -> heaters off")
+        link.heaters_off()
+        return 1
     except KeyboardInterrupt:
         log("interrupted -> ABORT")
         link.abort()
+        link.heaters_off()
         return 1
+    except Exception as e:                          # noqa: BLE001 - never leave the printer hot
+        log("streamer error (%s: %s) -> ABORT, heaters off" % (type(e).__name__, e))
+        try:
+            link.abort()
+        finally:
+            link.heaters_off()
+        return 1
+
+
+
+def _mm(v):
+    return "%.1f" % v if v is not None else "?"
 
 
 if __name__ == "__main__":

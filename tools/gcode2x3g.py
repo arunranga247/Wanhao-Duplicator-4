@@ -79,7 +79,7 @@ SWAP_PURGE_MM = 6.0      # purge of the new nozzle (in the air, in front of the 
 
 
 def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, log=print,
-            color_z=None, tool2=None, temp2=None):
+            color_z=None, tool2=None, temp2=None, first_temp=None):
     """color_z: print every layer ABOVE this height (mm) with tool2 (the other extruder).
     One colour change per print -> clean two-colour parts on a dual-nozzle machine."""
     lines = open(gcode_path, encoding="utf-8", errors="replace").read().splitlines()
@@ -97,7 +97,9 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
                            % (x0, x1, y0, y1))
     if tool == 0 and x1 - CX > HEAD_X_MAX:
         raise ConvertError("right nozzle cannot reach X %.0f" % x1)
-    first_temp = int(info["temps"][0])
+    # PrusaSlicer writes no start temperature (empty start G-code), so the first M104 in the file
+    # is the LATER-layer temperature - use the first-layer temperature the user asked for
+    first_temp = int(first_temp or info["temps"][0])
     name = (name or os.path.splitext(os.path.basename(out_path))[0])[:20]
 
     p = Printer()

@@ -177,6 +177,47 @@ def face_geometry(V, T):
     return a, b, c, n, area2 / 2
 
 
+SMALL_SPAN = 3.0        # overhang spots no wider than this (holes, slots, short bridges) print fine
+
+
+def overhang_islands(V, T, idx, area):
+    """Group touching overhang faces into spots. Returns (area of spots that need support,
+    area of narrow spots - round holes, slots, short bridges - that print fine without)."""
+    if len(idx) == 0:
+        return 0.0, 0.0
+    parent = list(range(len(idx)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    owner = {}
+    for k, f in enumerate(idx):
+        for v in T[f]:
+            j = owner.setdefault(int(v), k)
+            if j != k:
+                a, b = find(j), find(k)
+                if a != b:
+                    parent[a] = b
+    groups = {}
+    for k in range(len(idx)):
+        groups.setdefault(find(k), []).append(idx[k])
+    big = small = 0.0
+    for faces in groups.values():
+        xy = V[T[faces].ravel()][:, :2]
+        xy = xy - xy.mean(axis=0)
+        # true narrow width, whatever direction the spot runs (diagonal slots and holes too)
+        _, vecs = np.linalg.eigh(np.cov(xy.T) + np.eye(2) * 1e-9) if len(xy) > 2 else (None, np.eye(2))
+        span = min(np.ptp(xy @ vecs[:, 0]), np.ptp(xy @ vecs[:, 1]))
+        if span <= SMALL_SPAN:
+            small += float(area[faces].sum())
+        else:
+            big += float(area[faces].sum())
+    return big, small
+
+
 def analyze(V, T, M, supports, thin_samples=1500):
     a, b, c, n, area = face_geometry(V, T)
     z0 = V[:, 2].min()
@@ -187,8 +228,9 @@ def analyze(V, T, M, supports, thin_samples=1500):
     # open / non-manifold edges
     e = np.sort(np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]]), axis=1)
     _, cnt = np.unique(e, axis=0, return_counts=True)
+    big_area, small_area = overhang_islands(V, T, np.where(over)[0], area)
     r = {"open_edges": int((cnt == 1).sum()), "nonmanifold_edges": int((cnt > 2).sum()),
-         "overhang_area": float(area[over].sum()), "contact_area": float(area[contact].sum()),
+         "overhang_area": big_area, "overhang_small": small_area, "contact_area": float(area[contact].sum()),
          "watertight": M is not None, "bodies": [], "thin": [], "volume": None}
     if M is None:
         return r
@@ -244,14 +286,15 @@ def part_checks(name, V, r, supports, brim, scale):
         out.append(("WARN", "Tiny pieces", "%d piece(s) thinner than 1 mm - may not print or may break off"
                     % len(tiny)))
     oa = r["overhang_area"] * (scale / 100) ** 2
-    if oa < 100:
-        out.append(("OK", "Overhangs", "%.0f mm2 steeper than 45 deg - small (holes, short bridges): "
-                    "prints fine without supports" % oa))
+    sa = r.get("overhang_small", 0.0) * (scale / 100) ** 2
+    small_note = (" (+ %.0f mm2 in small holes / slots / short bridges - those print fine)" % sa) if sa >= 1 else ""
+    if oa < 50:
+        out.append(("OK", "Overhangs", "no large overhangs - prints without supports%s" % small_note))
     elif supports:
-        out.append(("OK", "Overhangs", "%.0f mm2 steeper than 45 deg - supports are ON" % oa))
+        out.append(("OK", "Overhangs", "%.0f mm2 steeper than 45 deg - supports are ON%s" % (oa, small_note)))
     else:
         out.append(("WARN", "Overhangs", "%.0f mm2 steeper than 45 deg (red in the 3-D view) - "
-                    "set Supports 1 or turn the part" % oa))
+                    "set Supports 1 or turn the part%s" % (oa, small_note)))
     ca = r["contact_area"] * (scale / 100) ** 2
     tip = size[2] / max(np.sqrt(max(ca, 1e-6)), 1e-6)
     if ca < 40:
