@@ -85,7 +85,8 @@ with tempfile.TemporaryDirectory() as tmp:
     try:
         res = convert(gcode, out_x3g, name=name, tool=0 if a.only == "right" else 1,
                       z_offset=a.z_offset, log=lambda m: print(m),
-                      color_z=a.color_z if a.color_z > 0 else None, temp2=a.temp)
+                      color_z=a.color_z if a.color_z > 0 else None, temp2=a.temp,
+                      first_temp=a.first_temp)
     except ConvertError as e:
         sys.exit("Conversion refused: %s" % e)
     # keep a copy of the G-code next to the x3g (handy for checking in a G-code viewer)
