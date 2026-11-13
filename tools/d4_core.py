@@ -122,7 +122,7 @@ OBJECTS = {
         "params": [("layer-height", "Layer (mm)", 0.2, 0.1, 0.3, 0.05),
                    ("infill", "Infill (%)", 20, 0, 100, 5),
                    ("walls", "Walls", 3, 1, 6, 1),
-                   ("supports", "Supports 0/1", 0, 0, 1, 1),
+                   ("supports", "Supports 0/1/2", 0, 0, 2, 1),
                    ("brim", "Brim (mm)", 5, 0, 15, 1),
                    ("scale", "Scale (%)", 100, 10, 500, 5),
                    ("temp", "Nozzle °C", 210, 180, 240, 5),
@@ -168,8 +168,10 @@ PARAM_HELP = {
               "100 % = solid.\nMore infill = stronger, heavier and slower.",
     "walls": "How many outlines go round every layer. More walls = stronger sides that do not leak.\n"
              "2 - 3 is normal.",
-    "supports": "1 = print removable pillars under parts that hang in the air (overhangs steeper than "
-                "45°). Break them off after printing.\n0 = no supports.",
+    "supports": "Removable supports under parts that hang in the air (overhangs steeper than 45°).\n"
+                "0 = no supports  ·  1 = tree supports (standard): thin branches that touch the model only "
+                "where needed - less plastic, cleaner surface, snap off easily  ·  2 = straight pillars, only "
+                "for big flat overhangs.",
     "brim": "A thin flat ring printed round the part on the first layer so the corners do not lift. "
             "Peel it off after printing.\n0 = no brim.",
     "scale": "Size of the model.\n100 % = as designed  ·  50 % = half size  ·  200 % = double size.",
@@ -188,7 +190,12 @@ PARAM_HELP = {
     "twist": "How far the vase turns from the bottom to the top (360° = one full turn).",
     "lobes": "How many petals go round the vase.",
     "size": "Length of each side of the block / cube.",
-    "_extruder": "Which nozzle prints: Left or Right. Load filament in that nozzle first.",
+    "_extruder": "Which nozzle prints: Left or Right. Load filament in that nozzle first.\n"
+                 "Both = two parts in two colours in ONE print, e.g. a case base in one colour and its "
+                 "lid in another: part 1 on the left nozzle, part 2 on the right nozzle, side by side "
+                 "with a small purge tower that keeps the colours clean.",
+    "_model2": "Part 2 of a two-colour print (for example the lid). It is printed by the RIGHT nozzle, "
+               "next to part 1. Load the second colour in the right nozzle.",
     "_model": "The 3D design file to print: STL, 3MF or OBJ (from Tinkercad, Thingiverse, Paint 3D ...).",
 }
 
@@ -325,9 +332,11 @@ def parse_fit_result(sout, serr):
     return {"verdict": verdict, "text": text, "report": report, "lines": tagged}
 
 
-def generate_args(obj, values, extruder, name_text, model, out_dir, slicer_found):
+def generate_args(obj, values, extruder, name_text, model, out_dir, slicer_found, model2=None):
     """Command-line arguments for an object's generator script.
-    values: flag -> text typed by the user.  -> (args, name, error_title, error_message)."""
+    values: flag -> text typed by the user. extruder: "left", "right" or "both" (two parts, two
+    colours: model = part 1 on the left nozzle, model2 = part 2 on the right nozzle).
+    -> (args, name, error_title, error_message)."""
     name = obj["name"] if obj.get("fixed_name") else safe_name(name_text)
     if not name:
         return None, None, "File name", "Enter a file name (letters, numbers, _ or -)."
@@ -343,6 +352,18 @@ def generate_args(obj, values, extruder, name_text, model, out_dir, slicer_found
                 "The PrusaSlicer engine was not found.\n\nPut the PrusaSlicer folder in an 'engine' "
                 "folder next to the app, or install PrusaSlicer.")
         args += ["--model", m]
+        if extruder == "both":
+            m2 = (model2 or "").strip().strip('"')
+            if not os.path.isfile(m2):
+                return None, None, "Part 2", ("Choose the file of part 2 (printed by the RIGHT nozzle), "
+                                              "for example the lid of a case.")
+            if os.path.normcase(os.path.abspath(m2)) == os.path.normcase(os.path.abspath(m)):
+                return None, None, "Part 2", "Part 1 and part 2 are the same file - choose two different parts."
+            cz = parse_number(values.get("color-z", 0))
+            if cz:
+                return None, None, "Colour Z", ("Two parts already gives two colours. Set 'Colour Z' to 0 "
+                                                "for a two-part print.")
+            args += ["--model2", m2]
     for flag, label, default, lo, hi, step in obj["params"]:
         v = parse_number(values.get(flag, default))
         if v is None:
