@@ -89,6 +89,7 @@ QLabel#cardTitle { font-size: 11pt; font-weight: 600; padding: 0 0 2px 4px; }
 QLabel#big { font-size: 20pt; font-weight: 600; }
 QLabel#value { font-size: 13pt; font-weight: 700; }
 QLabel#jobTitle { font-size: 17pt; font-weight: 600; }
+QLabel#jobTitleSmall { font-size: 13pt; font-weight: 600; }
 QLabel#mono, QLabel#fileInfo { font-family: Consolas; font-size: 9pt; }
 QLabel[tone="dim"] { color: %(dim)s; }
 QLabel[tone="ok"] { color: %(ok)s; }
@@ -191,6 +192,14 @@ def app_icon():
 # =============================================================================================
 # Small widgets
 # =============================================================================================
+class OwnWheelText(QPlainTextEdit):
+    """Text box that scrolls itself and never passes the mouse wheel on to the page around it."""
+
+    def wheelEvent(self, e):
+        super().wheelEvent(e)
+        e.accept()
+
+
 class NoWheelSpin(QSpinBox):
     """Scrolling the page must never change a temperature: the wheel only works after a click."""
 
@@ -426,7 +435,8 @@ varying vec3 vN;
 varying vec3 vP;
 varying vec3 vC;
 void main() {
-    if (lit < 0.5) { gl_FragColor = vec4(vcol > 0.5 ? vC : color, 1.0); return; }
+    vec3 base = vcol > 0.5 ? vC : color;                // own colour per part, or one colour
+    if (lit < 0.5) { gl_FragColor = vec4(base, 1.0); return; }
     vec3 n = normalize(vN);
     vec3 v = normalize(-vP);
     if (dot(n, v) < 0.0) n = -n;                       // two-sided: open meshes look right too
@@ -435,7 +445,7 @@ void main() {
     float f = max(dot(n, v), 0.0);
     vec3 h = normalize(L + v);
     float s = pow(max(dot(n, h), 0.0), 48.0) * 0.22;
-    gl_FragColor = vec4(color * (0.28 + 0.47 * d + 0.30 * f) + vec3(s), 1.0);
+    gl_FragColor = vec4(base * (0.28 + 0.47 * d + 0.30 * f) + vec3(s), 1.0);
 }
 """
 GL_FLOAT, GL_TRIANGLES, GL_LINES = 0x1406, 4, 1
@@ -605,7 +615,13 @@ class GLViewer(ViewMixin, QOpenGLWidget):
     def _upload_mesh(self, scene):
         v = scene.P[scene.T].reshape(-1, 3)
         n = np.repeat(scene.n, 3, axis=0)
-        self._upload(self.mesh_buf, np.hstack([v, n]))
+        rgb = getattr(scene, "tri_rgb", None)
+        self.mesh_colours = rgb is not None                 # two-part print: each part its own colour
+        if self.mesh_colours:
+            c = np.repeat(np.asarray(rgb, dtype=np.float64) / 255.0, 3, axis=0)
+            self._upload(self.mesh_buf, np.hstack([v, n, c]))
+        else:
+            self._upload(self.mesh_buf, np.hstack([v, n]))
         self.n_vert = len(v)
 
     def _upload_paths(self, tp):
@@ -694,10 +710,13 @@ class GLViewer(ViewMixin, QOpenGLWidget):
         pr.setUniformValue(loc_col, QVector3D(bed_line.redF(), bed_line.greenF(), bed_line.blueF()))
         f.glDrawArrays(GL_LINES, self.n_quad, self.n_lines)
         if self.mode == "mesh" and self.n_vert:
-            self._attrs(self.mesh_buf)
+            colours = getattr(self, "mesh_colours", False)
+            self._attrs(self.mesh_buf, colours=colours)
             pr.setUniformValue1f(loc_lit, 1.0)
+            pr.setUniformValue1f(loc_vcol, 1.0 if colours else 0.0)
             pr.setUniformValue(loc_col, QVector3D(*MODEL_RGB))
             f.glDrawArrays(GL_TRIANGLES, 0, self.n_vert)
+            pr.setUniformValue1f(loc_vcol, 0.0)
         elif self.mode == "paths" and self.path_vert:
             self._attrs(self.path_buf, colours=True)
             pr.setUniformValue1f(loc_lit, 0.0)
@@ -1157,6 +1176,7 @@ class MainWindow(QMainWindow):
         self._last_temps, self._last_pos = {}, [0.0] * 5
         self._controls, self._ports = [], []
         self._stats_cache, self._check_cache = {}, {}
+        self._paths_cache = {}                          # path -> (mtime, Toolpath) for the 3D preview
         self._gen_name_done = None
         self._model_key = None
         self.ui = core.load_settings().get("ui", {})
@@ -1249,7 +1269,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.tabs, 1)
         self.tab_printer = self._scroll_tab(self._build_printer_tab())
         self.tab_prepare = self._build_prepare_tab()             # scrolls inside (settings column)
-        self.tab_print = self._scroll_tab(self._build_print_tab())
+        self.tab_print = self._build_print_tab()                # fits the window: no page scrolling
         self.tabs.addTab(self.tab_printer, "🖨  Printer")
         self.tabs.addTab(self.tab_prepare, "🧩  Prepare")
         self.tabs.addTab(self.tab_print, "📂  Print")
@@ -1571,20 +1591,33 @@ class MainWindow(QMainWindow):
         self.param_widgets = {}
         r0 = 0
         self.model_edit = None
+        self.model2_edit = None
         if obj.get("model"):
-            g.addWidget(self._label("3D model file", "_model"), 0, 0)
+            lw = self._label("3D model file", "_model")
+            self.model_label = lw.findChild(QLabel)
+            g.addWidget(lw, 0, 0)
             self.model_edit = QLineEdit(saved.get("_model", ""))
             self.model_edit.setPlaceholderText("STL, 3MF or OBJ file")
             self.model_edit.textChanged.connect(lambda _t: self._queue_model_preview())
-            g.addWidget(self.model_edit, 0, 1, 1, 4)
+            g.addWidget(self.model_edit, 0, 1, 1, 3)
+            g.addWidget(button("📂 Browse…", self.pick_model, kind="tonal", tip="Choose the 3D model"), 0, 4)
+            # part 2 of a two-colour print (only shown when Extruder = Both)
+            self.model2_row = [self._label("Part 2 file (right nozzle)", "_model2")]
+            self.model2_edit = QLineEdit(saved.get("_model2", ""))
+            self.model2_edit.setPlaceholderText("second part, e.g. the lid")
+            self.model2_edit.textChanged.connect(lambda _t: self._queue_model_preview())
+            b2 = button("📂 Browse…", self.pick_model2, kind="tonal", tip="Choose part 2")
+            self.model2_row += [self.model2_edit, b2]
+            g.addWidget(self.model2_row[0], 1, 0)
+            g.addWidget(self.model2_edit, 1, 1, 1, 3)
+            g.addWidget(b2, 1, 4)
             row = QHBoxLayout()
             row.setSpacing(6)
-            row.addWidget(button("📂 Browse…", self.pick_model, kind="tonal"))
             row.addWidget(button("🔍 Fit check", lambda: self.fit_check(), kind="tonal"))
             row.addWidget(button("🧩 Assembly…", self.fit_check_assembly, kind="tonal"))
             row.addStretch(1)
-            g.addLayout(row, 1, 0, 1, 4)
-            r0 = 2
+            g.addLayout(row, 2, 0, 1, 4)
+            r0 = 3
         params = obj["params"]
         two = len(params) > 5
         for i, (flag, lab, default, lo, hi, step) in enumerate(params):
@@ -1602,17 +1635,25 @@ class MainWindow(QMainWindow):
         self.ext_group = QButtonGroup(self.param_host)
         self.ext_left = QRadioButton("Left", self.param_host)
         self.ext_right = QRadioButton("Right", self.param_host)
-        for rb in (self.ext_left, self.ext_right):
+        self.ext_both = QRadioButton("Both (2 parts, 2 colours)", self.param_host)
+        self.ext_both.setToolTip(help_html("Both", "_extruder"))
+        can_both = bool(obj.get("model"))                 # two parts: your own models only
+        for rb in (self.ext_left, self.ext_right, self.ext_both):
             self.ext_group.addButton(rb)
-            rb.setVisible(bool(obj["extruder"]))
-        (self.ext_right if saved.get("_extruder") == "right" else self.ext_left).setChecked(True)
+            rb.setVisible(bool(obj["extruder"]) and (rb is not self.ext_both or can_both))
+        want = saved.get("_extruder")
+        {"right": self.ext_right, "both": self.ext_both if can_both else self.ext_left}.get(want, self.ext_left).setChecked(True)
         if obj["extruder"]:
             g.addWidget(self._label("Extruder", "_extruder"), row, 0)
             er = QHBoxLayout()
             er.addWidget(self.ext_left)
             er.addWidget(self.ext_right)
+            if can_both:
+                er.addWidget(self.ext_both)
             er.addStretch(1)
-            g.addLayout(er, row, 1, 1, 3)
+            g.addLayout(er, row, 1, 1, 4)
+        self.ext_group.buttonToggled.connect(lambda *_: self._extruder_changed())
+        self._extruder_changed(preview=False)
         g.setColumnStretch(4, 1)                          # spare width goes to the right edge, not a box
         self.gen_name.setEnabled(not obj.get("fixed_name"))
         self.gen_name.setText(saved.get("_name", obj["name"]))
@@ -1647,7 +1688,30 @@ class MainWindow(QMainWindow):
         name = self.obj_box.currentText()
         self.info(name, core.OBJECTS[name]["desc"])
 
+    def _extruder_changed(self, preview=True):
+        """Both = two parts: show the part 2 row and name the first file 'Part 1'."""
+        both = self.extruder() == "both"
+        for w in getattr(self, "model2_row", []) if self.model2_edit is not None else []:
+            w.setVisible(both)
+        if self.model2_edit is not None:
+            self.model_label.setText("Part 1 file (left nozzle)" if both else "3D model file")
+            if preview:
+                self._queue_model_preview()
+
+    def model2_path(self):
+        return self.model2_edit.text().strip().strip('"') if self.model2_edit is not None else ""
+
+    def pick_model2(self):
+        start = os.path.dirname(self.model2_path() or self.model_path()) or d4_paths.MODELS
+        p = self.pick_file("Choose part 2 (printed by the right nozzle)", start,
+                           "3D models (*.stl *.3mf *.obj);;All files (*.*)")
+        if p:
+            self.model2_edit.setText(os.path.normpath(p))
+            self._queue_model_preview()
+
     def extruder(self):
+        if self.ext_both.isChecked() and self.ext_both.isVisibleTo(self.param_host):
+            return "both"
         return "right" if self.ext_right.isChecked() else "left"
 
     def model_path(self):
@@ -1661,6 +1725,7 @@ class MainWindow(QMainWindow):
         vals["_extruder"] = self.extruder()
         if core.OBJECTS[obj].get("model"):
             vals["_model"] = self.model_path()
+            vals["_model2"] = self.model2_path()
         if not core.OBJECTS[obj].get("fixed_name"):
             vals["_name"] = self.gen_name.text()
         self._obj_params[obj] = vals
@@ -1677,19 +1742,28 @@ class MainWindow(QMainWindow):
         m = self.model_path()
         if not os.path.isfile(m) or os.path.splitext(m)[1].lower() not in MODEL_EXT:
             return
-        key = "%s|%s" % (m, os.path.getmtime(m))
+        m2 = self.model2_path() if self.extruder() == "both" else ""
+        if m2 and not (os.path.isfile(m2) and os.path.splitext(m2)[1].lower() in MODEL_EXT):
+            m2 = ""                                            # part 2 not chosen yet: show part 1 alone
+        opts = (self.param_widgets["scale"][0].value() if "scale" in self.param_widgets else 100.0,
+                self.param_widgets["brim"][0].value() if "brim" in self.param_widgets else 5.0)
+        key = "%s|%s|%s|%s|%s" % (m, os.path.getmtime(m), m2, os.path.getmtime(m2) if m2 else "", opts if m2 else "")
         if key == self._model_key and self.model_area.scene is not None:
             self.model_area.show_scene(self.model_area.scene)      # already loaded: just show it again
             self._show_model_info(m, self.model_area.scene)
             return
         self._model_key = key
         self.model_area.show_message("Loading %s …" % os.path.basename(m))
-        threading.Thread(target=self._model_load_worker, args=(m, key), daemon=True).start()
+        threading.Thread(target=self._model_load_worker, args=(m, key, m2, opts), daemon=True).start()
 
-    def _model_load_worker(self, model, key):
+    def _model_load_worker(self, model, key, model2="", opts=(100.0, 5.0)):
         try:
             import model_preview
-            self.events.put(("model_scene", key, model, model_preview.Scene(model), None))
+            if model2:                                         # two parts, laid out as they will print
+                scene = model_preview.PartsScene(model, model2, scale_pct=opts[0], brim=opts[1])
+            else:
+                scene = model_preview.Scene(model)
+            self.events.put(("model_scene", key, model, scene, None))
         except Exception as e:                                 # noqa: BLE001 - shown in the preview box
             self.events.put(("model_scene", key, model, None, "%s: %s" % (type(e).__name__, e)))
 
@@ -1704,9 +1778,14 @@ class MainWindow(QMainWindow):
         self._show_model_info(model, scene)
 
     def _show_model_info(self, model, scene):
+        if getattr(self, "_fit_running", False):
+            return                                            # keep the "fit check running" message
         self.gen_to_print.hide()
+        names = os.path.basename(model)
+        if getattr(scene, "tri_rgb", None) is not None:          # two-part print
+            names = "%s  +  %s" % (names, os.path.basename(self.model2_path()))
         self.gen_status.setText("📦 %s\n%s\n🖱 Drag to turn  ·  right-drag to move  ·  wheel to zoom  ·  "
-                                "double-click to reset" % (os.path.basename(model), scene.info))
+                                "double-click to reset" % (names, scene.info))
         set_tone(self.gen_status, "bad" if "TOO BIG" in scene.info else "dim")
 
     def pick_model(self):
@@ -1736,6 +1815,7 @@ class MainWindow(QMainWindow):
         self.gen_status.setText("🔍 Fit check of %s running …" % what)
         set_tone(self.gen_status, "dim")
         self.log("Fit check: %s" % ", ".join(os.path.basename(f) for f in files))
+        self._fit_running = True
         threading.Thread(target=self._fit_worker, args=(args,), daemon=True).start()
 
     def fit_check_assembly(self):
@@ -1753,6 +1833,7 @@ class MainWindow(QMainWindow):
         self.events.put(("fit_done", code, sout or "", serr or ""))
 
     def on_fit_done(self, _code, sout, serr):
+        self._fit_running = False
         r = core.parse_fit_result(sout, serr)
         self.gen_status.setText(r["text"])
         set_tone(self.gen_status, {"OK": "ok", "WARN": "warn"}.get(r["verdict"], "bad"))
@@ -1767,7 +1848,8 @@ class MainWindow(QMainWindow):
         values = {flag: "%g" % sp.value() for flag, (sp, lo, hi) in self.param_widgets.items()}
         args, name, et, em = core.generate_args(obj, values, self.extruder(), self.gen_name.text(),
                                                 self.model_path(), OUT,
-                                                bool(d4_paths.find_prusaslicer()) if obj.get("model") else True)
+                                                bool(d4_paths.find_prusaslicer()) if obj.get("model") else True,
+                                                model2=self.model2_path())
         if et:
             self.error(et, em)
             return
@@ -1831,12 +1913,16 @@ class MainWindow(QMainWindow):
 
     # ======================= PRINT TAB =======================================================
     def _build_print_tab(self):
+        # left: file list, file info, print job  |  right: the 3D preview over the full height
         page = QWidget()
-        g = QGridLayout(page)
-        g.setContentsMargins(12, 12, 12, 12)
-        g.setSpacing(12)
-        g.setColumnStretch(0, 3)
-        g.setColumnStretch(1, 2)
+        page.setObjectName("tabPage")
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(12)
+        left, right = QVBoxLayout(), QVBoxLayout()
+        left.setSpacing(12)
+        outer.addLayout(left, 1)
+        outer.addLayout(right, 1)
         o, b = card("Print files (output folder)")
         self.tree = QTreeWidget()
         self.tree.setColumnCount(6)
@@ -1858,29 +1944,33 @@ class MainWindow(QMainWindow):
         row.addWidget(button("🗑 Delete", self.delete_file))
         row.addStretch(1)
         b.addLayout(row)
-        g.addWidget(o, 0, 0)
+        left.addWidget(o, 3)
         o, b = card("Selected file")
-        self.file_info = QPlainTextEdit("Select a file")      # scrolls, so a long check report never
+        self.file_info = OwnWheelText("Select a file")      # scrolls, so a long check report never
         self.file_info.setObjectName("fileInfo")              # pushes the Print-job card off screen
         self.file_info.setReadOnly(True)
-        self.file_info.setMinimumHeight(110)
+        self.file_info.setMinimumHeight(80)
         self.file_info.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         b.addWidget(self.file_info)
-        g.addWidget(o, 1, 0)
+        left.addWidget(o, 2)
         o, b = card("Preview")
-        self.file_preview = ImageView()
-        self.file_preview.setMinimumHeight(150)
-        b.addWidget(self.file_preview, 1)
-        g.addWidget(o, 0, 1)
+        # same preview box as the Prepare tab: the print paths in 3D (turn / zoom / layer slider),
+        # the overview picture one click away
+        self.file_area = ModelArea()
+        self.file_area.setMinimumHeight(300)
+        self.file_area.msg.setText("Select a file in the list to see it here")
+        self.file_preview = self.file_area.image           # the overview picture
+        b.addWidget(self.file_area, 1)
+        right.addWidget(o, 1)
         o, b = card("Print job")
+        row = QHBoxLayout()                               # print / pause / cancel on one row
         self.print_btn = self._ctl(button("▶  Print selected file", self.start_print, kind="filled"))
-        self.print_btn.setMinimumHeight(40)
-        b.addWidget(self.print_btn)
-        row = QHBoxLayout()
-        row.addWidget(self._ctl(button("⏸ Pause / Resume", lambda: self.worker.submit("pause"))))
-        row.addWidget(self._ctl(button("✖ Cancel print", self.cancel_print)))
+        self.print_btn.setMinimumHeight(36)
+        row.addWidget(self.print_btn, 2)
+        row.addWidget(self._ctl(button("⏸ Pause / Resume", lambda: self.worker.submit("pause"))), 1)
+        row.addWidget(self._ctl(button("✖ Cancel", self.cancel_print)), 1)
         b.addLayout(row)
-        self.job_name = label("No print running", name="jobTitle", wrap=True)
+        self.job_name = label("No print running", name="jobTitleSmall", wrap=True)
         b.addWidget(self.job_name)
         self.prog = QProgressBar()
         self.prog.setObjectName("jobBar")
@@ -1899,8 +1989,7 @@ class MainWindow(QMainWindow):
             grid.addLayout(cell, i // 3, i % 3)
             self.job_vals[k] = v
         b.addLayout(grid)
-        g.addWidget(o, 1, 1)
-        g.setRowStretch(0, 1)
+        left.addWidget(o, 0)
         return page
 
     # ---- library ---------------------------------------------------------------------------
@@ -1975,15 +2064,18 @@ class MainWindow(QMainWindow):
         prev = os.path.join(PREV, os.path.splitext(os.path.basename(path))[0] + ".png")
         stale = not os.path.exists(prev) or os.path.getmtime(prev) < os.path.getmtime(path)
         cc = self._check_cache.get(path)
-        need_check = not (cc and cc[0] == os.path.getmtime(path))
-        if stale or need_check:
-            self.file_preview.set_text("Rendering preview / checking …")
-            threading.Thread(target=self._prepare_file_worker, args=(path, prev, stale, need_check),
+        mt = os.path.getmtime(path)
+        need_check = not (cc and cc[0] == mt)
+        tp = self._paths_cache.get(path)
+        need_paths = not (tp and tp[0] == mt)
+        if stale or need_check or need_paths:
+            self.file_area.show_message("Loading the 3D preview / checking …")
+            threading.Thread(target=self._prepare_file_worker, args=(path, prev, stale, need_check, need_paths),
                              daemon=True).start()
         else:
-            self.file_preview.set_image(prev)
+            self.file_area.set_result(tp[1], prev if os.path.exists(prev) else None, keep_model=False)
 
-    def _prepare_file_worker(self, path, prev, stale, need_check):
+    def _prepare_file_worker(self, path, prev, stale, need_check, need_paths=True):
         try:
             if stale:
                 rp.render(path, out=prev)
@@ -1991,6 +2083,11 @@ class MainWindow(QMainWindow):
                 self._run_checker(path)
         except Exception as e:                                 # noqa: BLE001
             self.events.put(("log", "Preview/check failed for %s: %s" % (os.path.basename(path), e)))
+        if need_paths:
+            try:
+                self._paths_cache[path] = (os.path.getmtime(path), Toolpath(path))
+            except Exception:                                  # noqa: BLE001 - the picture still works
+                self._paths_cache[path] = (os.path.getmtime(path), None)
         self.events.put(("file_ready", path, prev))
 
     def on_file_ready(self, path, prev):
@@ -2000,8 +2097,9 @@ class MainWindow(QMainWindow):
             it.setText(4, "✅ OK" if cc[1] else "❌ FAIL")
         if self.selected_path() and os.path.normcase(self.selected_path()) == os.path.normcase(path):
             self._show_file_info(path, self._stats(path))
-            if os.path.exists(prev):
-                self.file_preview.set_image(prev)
+            tp = self._paths_cache.get(path, (0, None))[1]
+            if tp is not None or os.path.exists(prev):
+                self.file_area.set_result(tp, prev if os.path.exists(prev) else None, keep_model=False)
 
     def _show_file_info(self, path, st):
         cc = self._check_cache.get(path)
@@ -2026,6 +2124,8 @@ class MainWindow(QMainWindow):
                     os.remove(f)
                 except OSError:
                     pass
+            self._paths_cache.pop(p, None)
+            self.file_area.show_message("Select a file in the list to see it here")
             self.refresh_library()
 
     # ---- printing ------------------------------------------------------------------------
@@ -2344,6 +2444,7 @@ class MainWindow(QMainWindow):
         for d in self.findChildren(Dot):
             d.update()
         self.model_area.theme_changed()
+        self.file_area.theme_changed()
         self.log("Theme set to %s" % choice)
 
     @staticmethod

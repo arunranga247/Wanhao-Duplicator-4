@@ -137,6 +137,7 @@ def _raster(sx, sy, sd, W, H, budget=3000000):
 
 class Scene:
     """A model loaded once, ready to be drawn from any angle (the Prepare-tab 3D viewer)."""
+    tri_rgb = None                      # per-triangle colours (two-part prints), else orange
 
     def __init__(self, path):
         V, T = load_any(path)
@@ -218,7 +219,8 @@ class Scene:
         light /= np.linalg.norm(light)
         shade = 0.32 + 0.68 * np.abs(nc @ light)              # two-sided: open meshes still look right
         shade = np.where(facing, shade, shade * 0.55)         # inside faces seen through holes: darker
-        cols = np.clip(MODEL_RGB[None, :] * shade[:, None], 0, 255).astype(np.uint8)
+        base = self.tri_rgb if self.tri_rgb is not None else MODEL_RGB[None, :]
+        cols = np.clip(base * shade[:, None], 0, 255).astype(np.uint8)
         vx, vy, vd = cam(self.P)
         if _cull:                                             # quick frame: only faces turned to us
             sel = np.nonzero(facing)[0]
@@ -247,6 +249,59 @@ class Scene:
             pic[m] = (pic[m] * 0.55).astype(np.uint8)
         img = Image.fromarray(pic, "RGB")
         return img.resize((W, H), Image.LANCZOS) if S > 1 else img
+
+
+class PartsScene(Scene):
+    """Two parts for a two-colour print, laid out exactly as the slicer will place them
+    (two_part.layout): part 1 blue (left nozzle), part 2 red (right nozzle), purge tower grey."""
+    PART_RGB = (np.array([66.0, 133.0, 244.0]), np.array([234.0, 67.0, 53.0]))
+    TOWER_RGB = np.array([150.0, 150.0, 150.0])
+
+    def __init__(self, path1, path2, scale_pct=100.0, brim=5.0):
+        import two_part
+        meshes = [two_part.load_part(p, scale_pct) for p in (path1, path2)]
+        sizes = [(float(V[:, 0].max()), float(V[:, 1].max())) for V, T in meshes]
+        heights = [float(V[:, 2].max()) for V, T in meshes]
+        try:
+            lay = two_part.layout(sizes, brim)
+        except two_part.LayoutError as e:
+            raise ValueError(str(e))
+        Vs, Ts, cols, off = [], [], [], 0
+        for (V, T), (ox, oy), rgb in zip(meshes, lay["parts"], self.PART_RGB):
+            Vs.append(V + [ox, oy, 0.0])
+            Ts.append(T + off)
+            cols.append(np.repeat(rgb[None, :], len(T), axis=0))
+            off += len(V)
+        tx, ty = lay["tower"]                                 # purge tower: as tall as the shorter part
+        th = max(1.0, min(heights))
+        box = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], float)
+        box = box * [two_part.TOWER_W, 6.0, th] + [tx, ty + two_part.TOWER_D / 2 - 3.0, 0]
+        bt = np.array([[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+                       [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]])
+        Vs.append(box)
+        Ts.append(bt + off)
+        cols.append(np.repeat(self.TOWER_RGB[None, :], len(bt), axis=0))
+        V = np.vstack(Vs)
+        T = np.vstack(Ts)
+        rgb = np.vstack(cols)
+        self.n_tris = len(T)
+        self.P = V - np.array([two_part.BED_W / 2, two_part.BED_D / 2, 0.0])     # bed centre = origin
+        tri = self.P[T]
+        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        ln = np.linalg.norm(n, axis=1)
+        ok = ln > 1e-12
+        self.T, self.n, self.tri_rgb = T[ok], n[ok] / ln[ok, None], rgb[ok]
+        lo, hi = self.P.min(axis=0), self.P.max(axis=0)
+        self.size = hi - lo
+        self.fits, self.turned = True, False
+        self.center = (lo + hi) / 2
+        self.zc = float(self.center[2])
+        self.radius = max(float(np.linalg.norm(self.size)) / 2, 1e-3)
+        self.footprint = np.array([[lo[0], lo[1], 0], [hi[0], lo[1], 0], [hi[0], hi[1], 0], [lo[0], hi[1], 0]])
+        (w1, d1), (w2, d2) = sizes
+        self.info = ("Part 1 · left nozzle (blue): %.1f × %.1f × %.1f mm   ·   Part 2 · right nozzle (red): "
+                     "%.1f × %.1f × %.1f mm   ·   %s + purge tower (grey)"
+                     % (w1, d1, heights[0], w2, d2, heights[1], "side by side" if lay["rows"] == 1 else "one behind the other"))
 
 
 def render(path, out, W=960, H=720, bg="#d6d9df", yaw_deg=-35.0, pitch_deg=28.0):

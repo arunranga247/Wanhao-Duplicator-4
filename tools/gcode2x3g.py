@@ -82,9 +82,12 @@ SWAP_PURGE_MM = 6.0      # purge of the new nozzle (in the air, in front of the 
 
 
 def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, log=print,
-            color_z=None, tool2=None, temp2=None, first_temp=None, bed=0, tilt_x=0.0):
+            color_z=None, tool2=None, temp2=None, first_temp=None, bed=0, tilt_x=0.0, tools=None):
     """color_z: print every layer ABOVE this height (mm) with tool2 (the other extruder).
     One colour change per print -> clean two-colour parts on a dual-nozzle machine.
+    tools: two parts in two colours (G-code from a 2-extruder slice with T0 / T1 changes):
+    (nozzle for T0, nozzle for T1), e.g. (1, 0) = part 1 left, part 2 right. Both nozzles are hot
+    for the whole print; every T change is a software nozzle shift (never the bogus firmware T1).
     bed: heated-bed temperature (0 = off). Only the converter sets it - bed commands inside the
     G-code are ignored - and it is capped at BED_MAX_C.
     tilt_x: bed tilt compensation, mm per 100 mm toward the RIGHT. + lifts the nozzle on the right
@@ -126,6 +129,15 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     p.change_tool(0)
     p.home(z_fast=5.0, z_timeout=40)                  # slow Z homing - proven safe
     p.move(z=5.0, f=5.0)
+    two_parts = tools is not None
+    if two_parts:
+        if color_z:
+            raise ConvertError("two parts and a colour height cannot be combined")
+        tmap = {0: tools[0], 1: tools[1]}
+        first_t = next((int(ln.strip()[1]) for ln in lines if ln.strip() in ("T0", "T1")), 0)
+        tool = tmap[first_t]                           # the nozzle that prints first
+        tool2 = tmap[1 - first_t]
+        temp2 = int(temp2 or first_temp)
     two_colour = bool(color_z) and color_z > 0
     if two_colour:
         tool2 = (1 - tool) if tool2 is None else tool2
@@ -139,8 +151,10 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     p.set_temp(tool, first_temp)
     if two_colour:
         p.set_temp(tool2, STANDBY_C)                   # second colour waits warm, not hot
+    if two_parts:
+        p.set_temp(tool2, first_temp)                  # both parts grow together: both nozzles hot
     p.wait_tool(tool)
-    if two_colour:
+    if two_colour or two_parts:
         p.wait_tool(tool2)                             # standby nozzle warm too: nothing heats mid-print
     p.change_tool(tool, shift=False)                 # head at the X end: next move goes direct
 
@@ -167,6 +181,7 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     warned = set()
     active = tool
     swapped = False
+    swaps = 0
     purge_y = min(-62.0, (y0 - CY) - 10.0)
     for ln in lines:
         if ln.startswith(";LAYER_CHANGE"):
@@ -195,6 +210,15 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
             continue
         cmd, w = parse(ln)
         if cmd is None:
+            continue
+        if two_parts and cmd in ("T0", "T1"):
+            # ---- part change: the other nozzle prints the other part (and purges on the tower) ----
+            new = tmap[int(cmd[1])]
+            if new != active:
+                p.comment("nozzle change: tool %d -> tool %d" % (active, new))
+                p.change_tool(new)                    # head shifts so the new nozzle is where the old one was
+                active = new
+                swaps += 1
             continue
         if cmd in ("G0", "G1"):
             if "F" in w:
@@ -245,9 +269,10 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
                 last_e = w["E"]
         elif cmd in ("M104", "M109"):
             if "S" in w:
-                p.set_temp(active, int(w["S"]))
+                which = tmap.get(int(w["T"]), active) if two_parts and "T" in w else active
+                p.set_temp(which, int(w["S"]))
                 if cmd == "M109":
-                    p.wait_tool(active)
+                    p.wait_tool(which)
         elif cmd == "G4":
             ms = int(w.get("P", 0) + w.get("S", 0) * 1000)
             if ms > 0:
@@ -279,9 +304,9 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     with open(out_path, "wb") as fh:
         fh.write(p.x3g)
     return {"layers": info["layers"], "zmax": info["zmax"], "commands": p.ncmd,
-            "filament": p.e[tool] + (p.e[tool2] if two_colour else 0.0),
+            "filament": p.e[tool] + (p.e[tool2] if (two_colour or two_parts) else 0.0),
             "filament_by_tool": tuple(p.e), "time_s": p.time_s, "temp": first_temp,
-            "two_colour": two_colour, "swapped": swapped,
+            "two_colour": two_colour, "swapped": swapped, "two_parts": two_parts, "swaps": swaps,
             "bbox": (x0 - CX, y0 - CY, x1 - CX, y1 - CY)}
 
 

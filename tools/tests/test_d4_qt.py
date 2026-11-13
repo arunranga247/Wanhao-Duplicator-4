@@ -557,7 +557,7 @@ class HelpSigns(Base):
             self.w.obj_box.setCurrentText(title)
             self.app.processEvents()
             flags = {b.property("flag") for b in self.w.param_host.findChildren(QToolButton) if b.objectName() == "help"}
-            want = {p[0] for p in obj["params"]} | ({"_model"} if obj.get("model") else set()) \
+            want = {p[0] for p in obj["params"]} | ({"_model", "_model2"} if obj.get("model") else set()) \
                 | ({"_extruder"} if obj["extruder"] else set())
             self.assertEqual(flags, want, title)
 
@@ -612,6 +612,84 @@ class PrintPaths(Base):
             self.assertTrue(area.btns["model"].isVisibleTo(area) or not area.isVisible())
             area.show_view("model")
             self.assertEqual(area.current, "model")
+
+
+TOWER = os.path.join(d4_paths.DATA, "models", "test_step_tower.stl")
+
+
+@unittest.skipUnless(os.path.exists(MODEL) and os.path.exists(TOWER), "needs the two test models")
+class TwoParts(Base):
+    MODEL_OBJ = "📦 Your 3D model (STL / 3MF / OBJ)"
+
+    def setUp(self):
+        super().setUp()
+        self.w.obj_box.setCurrentText("Square block")
+        self.app.processEvents()
+        self.w.obj_box.setCurrentText(self.MODEL_OBJ)
+        self.app.processEvents()
+
+    def test_part2_row_only_with_both(self):
+        w = self.w
+        w.ext_left.setChecked(True)
+        self.assertFalse(w.model2_edit.isVisibleTo(w.param_host))
+        self.assertEqual(w.model_label.text(), "3D model file")
+        w.ext_both.setChecked(True)
+        self.assertTrue(w.model2_edit.isVisibleTo(w.param_host))
+        self.assertEqual(w.model_label.text(), "Part 1 file (left nozzle)")
+        self.assertEqual(w.extruder(), "both")
+        w.ext_right.setChecked(True)
+        self.assertFalse(w.model2_edit.isVisibleTo(w.param_host))
+
+    def test_both_only_for_own_models(self):
+        self.w.obj_box.setCurrentText("Square block")
+        self.app.processEvents()
+        self.assertFalse(self.w.ext_both.isVisibleTo(self.w.param_host))
+        self.assertNotEqual(self.w.extruder(), "both")
+
+    def test_missing_part2_is_refused(self):
+        self.w.model_edit.setText(MODEL)
+        self.w.ext_both.setChecked(True)
+        self.w.model2_edit.setText("")
+        self.w.generate()
+        self.assertIn("Part 2", self.titles("error"))
+
+    def test_preview_shows_both_parts(self):
+        self.w.tabs.setCurrentWidget(self.w.tab_prepare)
+        self.w.model_edit.setText(MODEL)
+        self.w.ext_both.setChecked(True)
+        self.w.model2_edit.setText(TOWER)
+        self.assertTrue(wait_for(lambda: self.w.model_area.showing_model()
+                                 and getattr(self.w.model_area.scene, "tri_rgb", None) is not None, 60))
+        self.assertIn("Part 2", self.w.gen_status.text())
+
+    def test_generate_two_colour_print(self):
+        self.w.model_edit.setText(MODEL)
+        self.w.ext_both.setChecked(True)
+        self.w.model2_edit.setText(TOWER)
+        self.w.gen_name.setText("T_TWO")
+        self.w.generate()
+        self.assertTrue(wait_for(lambda: self.w.gen_btn.isEnabled(), 400), "generate did not finish")
+        path = os.path.join(OUT_T, "T_TWO.x3g")
+        self.assertTrue(os.path.exists(path), self.w.gen_status.text())
+        self.assertEqual(self.w.gen_status.property("tone"), "ok", self.w.gen_status.text())
+        st = self.w._stats(path)
+        self.assertGreater(st["fil"][0], 5)                  # right nozzle printed (part 2)
+        self.assertGreater(st["fil"][1], 5)                  # left nozzle printed (part 1)
+        self.assertFalse(st["t1_change"])                    # never the faulty firmware T1
+
+
+class Layout2(unittest.TestCase):
+    def test_side_by_side_and_rows(self):
+        import two_part
+        lay = two_part.layout([(40, 30), (30, 20)], brim=5)
+        self.assertEqual(lay["rows"], 1)
+        (x1, y1), (x2, y2) = lay["parts"]
+        self.assertGreaterEqual(x2 - (x1 + 40), 14 - 1e-9)        # brims never touch
+        self.assertLessEqual(lay["tower"][0] + two_part.TOWER_W, two_part.BED_W - two_part.EDGE + 1e-9)
+        lay = two_part.layout([(100, 30), (100, 30)], brim=5)      # too wide side by side
+        self.assertEqual(lay["rows"], 2)
+        with self.assertRaises(two_part.LayoutError):
+            two_part.layout([(200, 130), (200, 130)], brim=5)
 
 
 class Licence(Base):

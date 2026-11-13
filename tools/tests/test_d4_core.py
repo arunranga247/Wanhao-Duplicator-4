@@ -243,6 +243,21 @@ class Generate(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_two_parts(self):
+        with tempfile.TemporaryDirectory() as d:
+            p1, p2 = os.path.join(d, "base.stl"), os.path.join(d, "lid.stl")
+            for p in (p1, p2):
+                open(p, "wb").close()
+            args, *_ = c.generate_args(self.MODEL, {}, "both", "CASE", p1, "O", True, model2=p2)
+            self.assertEqual(args[args.index("--model2") + 1], p2)
+            self.assertEqual(args[-2:], ["--only", "left"])                   # part 1 = left nozzle
+            self.assertEqual(c.generate_args(self.MODEL, {}, "both", "C", p1, "O", True, model2="")[2], "Part 2")
+            self.assertEqual(c.generate_args(self.MODEL, {}, "both", "C", p1, "O", True, model2=p1)[2], "Part 2")
+            self.assertEqual(c.generate_args(self.MODEL, {"color-z": "5"}, "both", "C", p1, "O", True,
+                                             model2=p2)[2], "Colour Z")
+            args, *_ = c.generate_args(self.MODEL, {}, "left", "C", p1, "O", True, model2=p2)
+            self.assertNotIn("--model2", args)                                 # only with "both"
+
     def test_fixed_name_object(self):
         demo = c.OBJECTS["Air demo (left, bed not used)"]
         args, name, *_ = c.generate_args(demo, {}, "left", "ignored", "", "O", True)

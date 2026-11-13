@@ -212,7 +212,7 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 | Layer (mm) | 0.1 fine · 0.2 normal · 0.3 draft | 0.2 |
 | Infill (%) | inside fill density | 20 |
 | Walls | number of outlines | 3 |
-| Supports 0/1 | automatic supports under overhangs | 0 |
+| Supports 0/1/2 | 0 = none · 1 = tree (organic) supports, the standard · 2 = straight pillars | 0 |
 | Brim (mm) | first-layer rim for grip | 5 |
 | Scale (%) | resize the model | 100 |
 | Nozzle °C / 1st layer °C | PLA temperatures | 210 / 220 |
