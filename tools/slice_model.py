@@ -6,7 +6,7 @@ Slice ANY 3D model (STL / 3MF / OBJ) for the Wanhao Duplicator 4.
 1. PrusaSlicer engine slices the model with the Duplicator 4 PLA profile
    (engine/duplicator4_pla.ini) + the options below
 2. gcode2x3g converts it with this printer's fixes (extruder direction, software nozzle
-   offset, slow Z homing, unheated bed, prime line)
+   offset, slow Z homing, heated bed 60 C for PLA, prime line)
 3. prints a short summary; the GUI then runs the safety checker and the preview
 """
 
@@ -40,6 +40,16 @@ ap.add_argument("--color-z", type=float, default=0.0,
                 help="two colours: layers above this height (mm) use the OTHER extruder (0 = off)")
 ap.add_argument("--fast", type=int, default=0,
                 help="1 = faster speeds for simple parts (boxes, brackets), melt rate capped at 8 mm3/s")
+ap.add_argument("--bed", type=int, default=60, help="heated bed C (PLA 60, 0 = off, max 70)")
+ap.add_argument("--fine", type=int, default=0,
+                help="1 = best finish: 0.12 mm layers, slow outer walls, ironed top surfaces, seam at "
+                     "the back (about 1.7x longer)")
+ap.add_argument("--tilt-x", type=float, default=0.0,
+                help="bed tilt fix, mm per 100 mm to the right (+ = right side too tight, - = gap too big)")
+ap.add_argument("--min-layer-time", type=float, default=0,
+                help="seconds per layer at least (0 = profile's 15 s); more = small parts cool better")
+ap.add_argument("--clean", type=int, default=1,
+                help="1 = travel moves stay inside the part (no strings across holes / gaps)")
 ap.add_argument("--prusaslicer", default=None)
 a = ap.parse_args()
 
@@ -60,7 +70,7 @@ out_x3g = os.path.join(a.out, name + ".x3g")
 with tempfile.TemporaryDirectory() as tmp:
     gcode = os.path.join(tmp, name + ".gcode")
     cmd = [engine, "--export-gcode", "--load", d4_paths.profile_path(),
-           "--layer-height", "%g" % a.layer_height,
+           "--layer-height", "%g" % (0.12 if a.fine else a.layer_height),
            "--fill-density", "%g%%" % a.infill,
            "--perimeters", "%d" % a.walls,
            "--brim-width", "%g" % a.brim,
@@ -76,6 +86,15 @@ with tempfile.TemporaryDirectory() as tmp:
         cmd += ["--perimeter-speed", "45", "--external-perimeter-speed", "32", "--infill-speed", "60",
                 "--solid-infill-speed", "45", "--top-solid-infill-speed", "28", "--gap-fill-speed", "30",
                 "--small-perimeter-speed", "20", "--bridge-speed", "30", "--max-volumetric-speed", "8"]
+    if a.clean:
+        cmd += ["--avoid-crossing-perimeters"]
+    if a.min_layer_time > 0:
+        cmd += ["--slowdown-below-layer-time", "%g" % a.min_layer_time, "--min-print-speed", "5"]
+    if a.fine:
+        # smooth walls (slow outer line), ironed flat tops, seam hidden at the back
+        cmd += ["--external-perimeter-speed", "15", "--perimeter-speed", "25",
+                "--top-solid-infill-speed", "15", "--ironing", "--ironing-type", "top",
+                "--ironing-flowrate", "15%", "--ironing-speed", "15", "--seam-position", "rear"]
     cmd.append(model)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=900,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -86,7 +105,7 @@ with tempfile.TemporaryDirectory() as tmp:
         res = convert(gcode, out_x3g, name=name, tool=0 if a.only == "right" else 1,
                       z_offset=a.z_offset, log=lambda m: print(m),
                       color_z=a.color_z if a.color_z > 0 else None, temp2=a.temp,
-                      first_temp=a.first_temp)
+                      first_temp=a.first_temp, bed=a.bed, tilt_x=a.tilt_x)
     except ConvertError as e:
         sys.exit("Conversion refused: %s" % e)
     # keep a copy of the G-code next to the x3g (handy for checking in a G-code viewer)
@@ -95,8 +114,9 @@ with tempfile.TemporaryDirectory() as tmp:
 
 x0, y0, x1, y1 = res["bbox"]
 print("wrote %s" % out_x3g)
-print("  %d layers, %.1f mm tall, footprint %.0f x %.0f mm, %s extruder, %d C"
-      % (res["layers"], res["zmax"], x1 - x0, y1 - y0, a.only, res["temp"]))
+print("  %d layers, %.1f mm tall, footprint %.0f x %.0f mm, %s extruder, %d C, bed %s"
+      % (res["layers"], res["zmax"], x1 - x0, y1 - y0, a.only, res["temp"],
+         "%d C" % a.bed if a.bed else "off"))
 if res.get("two_colour"):
     other = "left" if a.only == "right" else "right"
     fr, fl = res["filament_by_tool"]

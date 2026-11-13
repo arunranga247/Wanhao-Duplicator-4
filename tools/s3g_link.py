@@ -183,6 +183,11 @@ class Link:
         r = self.send(bytes([23]))
         return r[1] if r[0] == OK else None
 
+    def build_state(self):
+        """s3g 24: 0 none, 1 running, 2 finished, 3 PAUSED, 4 cancelled, 5 sleeping (None = no reply)."""
+        r = self.send(bytes([24]))
+        return r[1] if r[0] == OK and len(r) >= 2 else None
+
     def is_finished(self):
         r = self.send(bytes([11]))
         return r[0] == OK and r[1] == 1

@@ -8,7 +8,7 @@ Duplicator 4, when you only have the G-code and not the 3-D model.
 What it fixes:
   * drops the other printer's start / end code (G28 + purge lines that run off this bed,
     "present the print" moves) - the Duplicator 4's own safe start + prime line is used instead
-  * removes bed heating (this printer's bed sensor is faulty)
+  * replaces the other printer's bed heating with this printer's own (--bed, 60 C for PLA)
   * re-centres the parts on this 225 x 145 mm bed
   * shortens long Bowden retractions (e.g. 6.5 mm) to a direct-drive friendly length
   * sets this printer's temperatures (first layer + rest)
@@ -166,6 +166,7 @@ def main():
     ap.add_argument("--speed", type=float, default=0.6, help="factor on printing speeds (0.6 = 60 %%)")
     ap.add_argument("--first-speed", type=float, default=15.0, help="first layer speed cap, mm/s")
     ap.add_argument("--flow", type=float, default=1.05, help="extrusion multiplier")
+    ap.add_argument("--bed", type=int, default=60, help="heated bed C (PLA 60, 0 = off, max 70)")
     a = ap.parse_args()
     src = os.path.abspath(a.gcode)
     name = (a.name or os.path.splitext(os.path.basename(src))[0]).upper()
@@ -182,7 +183,7 @@ def main():
             fh.write("\n".join(lines) + "\n")
         try:
             res = convert(g, out_x3g, name=name, tool=0 if a.only == "right" else 1, z_offset=a.z_offset,
-                          log=lambda m: print(m), first_temp=a.first_temp)
+                          log=lambda m: print(m), first_temp=a.first_temp, bed=a.bed)
         except ConvertError as e:
             sys.exit("Conversion refused: %s" % e)
         with open(g, "rb") as fh, open(os.path.join(a.out, name + ".gcode"), "wb") as dst:
@@ -190,8 +191,8 @@ def main():
     print("ported %s -> %s" % (os.path.basename(src), out_x3g))
     print("  parts %.0f x %.0f mm, moved %+.1f / %+.1f mm to the bed centre, %d long retractions shortened to %.1f mm"
           % (size[0], size[1], shift[0], shift[1], n_ret, a.max_retract))
-    print("  %d layers, %.1f mm tall, %s extruder, %d C first layer then %d C, bed NOT heated"
-          % (res["layers"], res["zmax"], a.only, a.first_temp, a.temp))
+    print("  %d layers, %.1f mm tall, %s extruder, %d C first layer then %d C, bed %s"
+          % (res["layers"], res["zmax"], a.only, a.first_temp, a.temp, "%d C" % a.bed if a.bed else "off"))
     print("  speed %d %% of the original (first layer max %g mm/s), flow %d %%, first layer squish %+.2f mm"
           % (a.speed * 100, a.first_speed, a.flow * 100, a.z_offset))
     print("  filament %.0f mm (~%.1f g PLA), est. %.0f min after heat-up"

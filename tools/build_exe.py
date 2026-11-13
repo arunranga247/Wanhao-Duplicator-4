@@ -20,6 +20,8 @@ from PIL import Image, ImageDraw, ImageFont
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.normpath(os.path.join(TOOLS, ".."))
 BUILD = os.path.join(PROJECT, "build")
+# --dist DIR : write the .exe somewhere else (e.g. while the old .exe is still open and locked)
+DIST = os.path.abspath(sys.argv[sys.argv.index("--dist") + 1]) if "--dist" in sys.argv else PROJECT
 os.makedirs(BUILD, exist_ok=True)
 
 # ---- icon: Google-blue circle with "D4" -------------------------------------------
@@ -53,7 +55,7 @@ with open(version_file, "w", encoding="utf-8") as fh:
       StringStruct('FileDescription', 'Duplicator 4 Studio'),
       StringStruct('FileVersion', '%(s)s'),
       StringStruct('InternalName', 'Duplicator4Studio'),
-      StringStruct('LegalCopyright', 'Copyright (c) 2026 ARUN'),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 ARUN - GNU GPL v3.0'),
       StringStruct('OriginalFilename', 'Duplicator4Studio.exe'),
       StringStruct('ProductName', 'Duplicator 4 Studio'),
       StringStruct('ProductVersion', '%(s)s'),
@@ -66,18 +68,23 @@ with open(version_file, "w", encoding="utf-8") as fh:
 sep = ";" if os.name == "nt" else ":"
 datas = []
 for py in glob.glob(os.path.join(TOOLS, "*.py")):
-    if "backup" not in os.path.basename(py):
+    if "backup" not in os.path.basename(py) and not os.path.basename(py).startswith("d4_gui"):  # old Tk window
         datas += ["--add-data", py + sep + "tools"]
 datas += ["--add-data", os.path.join(PROJECT, "engine", "duplicator4_pla.ini") + sep + "engine",
           "--add-data", os.path.join(BUILD, "built_from.txt") + sep + "."]
 # fit check: 3-D report template + three.js (MIT, bundled so the report works offline)
 datas += ["--add-data", os.path.join(TOOLS, "fit_view_template.html") + sep + "tools"]
+# licences: our GPL-3.0 + every third-party licence travel inside the exe (shown via About)
+datas += ["--add-data", os.path.join(PROJECT, "LICENSE") + sep + ".",
+          "--add-data", os.path.join(PROJECT, "THIRD_PARTY_NOTICES.md") + sep + ".",
+          "--add-data", os.path.join(PROJECT, "licenses") + sep + "licenses"]
 for f in glob.glob(os.path.join(TOOLS, "vendor", "*")):
     datas += ["--add-data", f + sep + os.path.join("tools", "vendor")]
 
 hidden = ["argparse", "runpy", "contextlib", "tempfile", "json", "math", "struct", "glob",
-          "shutil", "winreg", "serial", "serial.tools.list_ports", "PIL.ImageTk", "PIL.ImageDraw",
-          "PIL.ImageFont", "sv_ttk",
+          "shutil", "winreg", "serial", "serial.tools.list_ports", "PIL.ImageDraw", "PIL.ImageFont",
+          # the Qt window (PySide6, LGPL) + its 3D viewer
+          "d4_core", "model_preview", "shiboken6", "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets",
           # fit_check.py (runs inside the exe): mesh maths + 3-D booleans
           "numpy", "manifold3d", "base64", "webbrowser", "zipfile", "xml.etree.ElementTree"]
 args = ["--noconfirm", "--clean", "--onefile", "--windowed",
@@ -85,18 +92,19 @@ args = ["--noconfirm", "--clean", "--onefile", "--windowed",
         "--icon", ico,
         "--version-file", version_file,
         "--paths", TOOLS,
-        "--distpath", PROJECT,
+        "--distpath", DIST,
         "--workpath", os.path.join(BUILD, "work"),
         "--specpath", BUILD,
-        "--collect-data", "sv_ttk"]
+        # the Tk window is retired: keep Tcl/Tk out of the exe
+        "--exclude-module", "tkinter", "--exclude-module", "_tkinter", "--exclude-module", "sv_ttk"]
 for h in hidden:
     args += ["--hidden-import", h]
-args += datas + [os.path.join(TOOLS, "d4_gui.py")]
+args += datas + [os.path.join(TOOLS, "d4_qt.py")]
 
 import PyInstaller.__main__  # noqa: E402
 
 print("building ...")
 PyInstaller.__main__.run(args)
-exe = os.path.join(PROJECT, "Duplicator4Studio.exe")
+exe = os.path.join(DIST, "Duplicator4Studio.exe")
 print("\nDONE: %s (%.1f MB)" % (exe, os.path.getsize(exe) / 1e6) if os.path.exists(exe) else "BUILD FAILED")
 sys.exit(0 if os.path.exists(exe) else 1)

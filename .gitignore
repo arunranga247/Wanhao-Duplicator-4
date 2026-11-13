@@ -9,9 +9,18 @@ __pycache__/
 
 # personal settings and runtime files (recreated automatically)
 tools/d4_settings.json
-output/*.txt
-output/.previews/
-output/*.png
+tools/d4_settings.json.tmp
 
-# fit check reports (recreated by the Fit check button)
-output/fitcheck_*.html
+# everything the app makes: print files (.x3g / .gcode), previews, logs, fit-check reports,
+# GUI review screenshots (output/gui_review) - recreated on this PC, never shared
+output/
+
+# my own 3D models / designs (STL files) - kept on this PC only.
+# the two test models stay: the self-test slices test_nut.stl, the README uses both.
+models/*
+!models/test_nut.stl
+!models/test_step_tower.stl
+
+# my own design scripts (each makes one object; the app never uses them) - run them as
+#   python designs/make_xxx.py      (they save into models/ and borrow helpers from tools/)
+designs/

@@ -2,9 +2,11 @@
 TWIST_VASE: a 3D-looking demo for the LEFT extruder of the Duplicator 4.
 
   * 6-lobed "flower" outline that TWISTS as it rises and BULGES in the middle
-  * 3 solid base layers, then a single wall printed in continuous spiral
-    ("vase mode"): Z rises smoothly all the way round, no layer seam
-  * left extruder only, PLA 210 C, bed NOT heated (faulty bed sensor)
+  * CLOSED solid bottom: 6 layers (~1.3 mm) - first an inward spiral, then a closed ring
+    + straight lines crossing direction every layer, so no gap goes through - then a
+    single wall printed in continuous spiral ("vase mode"): no layer seam
+  * left extruder only, PLA 210 C, heated bed 60 C (--bed 0 = off)
+  * no part fan on this printer: every wall turn takes at least --min-turn seconds (12)
   * slow Z homing (5 mm/s) with heaters off, then heat - same proven sequence
     as LEFT_SQ_HOME; firmware stays on tool 0 (bogus T1 offset)
 
@@ -36,7 +38,12 @@ ap.add_argument("--first-temp", type=int, default=220, help="nozzle temp for the
 ap.add_argument("--first-speed", type=float, default=8.0, help="first layer speed mm/s")
 ap.add_argument("--z-offset", type=float, default=-0.08,
                 help="shift the whole print in Z (e.g. -0.05 squeezes the first layer more)")
-ap.add_argument("--base-layers", type=int, default=3)
+ap.add_argument("--base-layers", type=int, default=6,
+                help="solid bottom layers (6 = ~1.3 mm, closed: crossing lines layer to layer)")
+ap.add_argument("--bed", type=int, default=60, help="heated bed C (0 = off)")
+ap.add_argument("--min-turn", type=float, default=12.0,
+                help="minimum seconds per wall turn - no part fan on this printer, so each turn "
+                     "needs time to cool before the next one goes on top")
 ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output"))
 a = ap.parse_args()
 
@@ -144,6 +151,9 @@ p.set_temp(1, 0)                           # heaters OFF until homing has worked
 p.change_tool(0)
 p.home(z_fast=5.0, z_timeout=40)           # slow Z homing - proven safe
 p.move(z=5.0, f=5.0)
+if a.bed:
+    p.set_bed(min(a.bed, 70))              # bed first (slow), nozzle after it: no oozing wait
+    p.wait_bed()
 p.set_temp(1, a.first_temp)                # LEFT nozzle only, hotter for the first layer
 p.wait_tool(1)
 p.change_tool(1, shift=False)              # head at X end: no shift, go straight to prime
@@ -172,19 +182,38 @@ for li in range(BASE_LAYERS):
             else:
                 p.move(ring[0][0], ring[0][1], f=sp)
             extrude_path(p, ring, kb, sp)
-    pts = spiral_fill(z - ZO, w)
-    p.comment("base layer %d z=%.2f: inward spiral, %d points" % (li + 1, z, len(pts)))
-    if li == 0 and a.brim > 0:
-        p.move(pts[0][0], pts[0][1], f=sp)    # step in from the brim, no retract
+    if li == 0:
+        # first layer: one clean inward spiral (best grip, no travel moves on the bed)
+        pts = spiral_fill(z - ZO, w)
+        p.comment("base layer %d z=%.2f: inward spiral, %d points" % (li + 1, z, len(pts)))
+        if a.brim > 0:
+            p.move(pts[0][0], pts[0][1], f=sp)    # step in from the brim, no retract
+        else:
+            travel_to(p, pts[0][0], pts[0][1], z, TRAVEL_F, 0.6, 1.0)
+        for x, y, gap in pts[1:]:
+            # volume to fill one gap-wide strip: length x gap x layer height
+            k = lh * max(gap, 0.05) / FIL_AREA * flow
+            px, py = p.pos[0], p.pos[1]
+            p.move(x, y, de=math.hypot(x - px, y - py) * k, f=sp)
     else:
-        travel_to(p, pts[0][0], pts[0][1], z, TRAVEL_F, 0.6, 1.0)
-    for x, y, gap in pts[1:]:
-        # volume to fill one gap-wide strip: length x gap x layer height
-        k = lh * max(gap, 0.05) / FIL_AREA * flow
-        px, py = p.pos[0], p.pos[1]
-        p.move(x, y, de=math.hypot(x - px, y - py) * k, f=sp)
+        # layers above: closed outline ring + straight lines that CROSS the layer below
+        # (spiral gaps would sit on top of each other; crossing lines cover every gap)
+        kb = bead_area(w, lh) / FIL_AREA * flow
+        ring = outline(z - ZO, w * 0.5)
+        p.comment("base layer %d z=%.2f: ring + %s lines" % (li + 1, z, "X" if li % 2 else "Y"))
+        travel_to(p, ring[0][0], ring[0][1], z, TRAVEL_F, 0.6, 1.0)
+        extrude_path(p, ring, kb, sp)
+        segs = scan_fill(outline(z - ZO, w * 0.5 + w * 0.6), w * SPACING, horizontal=bool(li % 2))
+        for n, (s0, s1) in enumerate(segs):
+            if n % 2:
+                s0, s1 = s1, s0                       # zig-zag: short hop to the next line
+            if math.hypot(s0[0] - p.pos[0], s0[1] - p.pos[1]) > 2.0:
+                travel_to(p, s0[0], s0[1], z, TRAVEL_F, 0.6, 1.0)
+            else:
+                p.move(s0[0], s0[1], f=sp)
+            p.move(s1[0], s1[1], de=math.hypot(s1[0] - s0[0], s1[1] - s0[1]) * kb, f=sp)
     p.retract(1.0)
-    p.percent(3 + 3 * li)
+    p.percent(3 + 1 * li)
 
 # ---- spiral wall (vase mode) --------------------------------------------------
 z0 = FIRST_H + (BASE_LAYERS - 1) * H + ZO     # top of the base
@@ -194,6 +223,9 @@ start = outline(z0 - ZO + H, W * 0.5)[0]
 travel_to(p, start[0], start[1], z0 + H * 0.05, TRAVEL_F, 0.6, 1.0)
 p.comment("spiral wall: %d turns" % turns)
 for t in range(turns):
+    ring = outline(z0 - ZO + t * H, W * 0.5)
+    turn_len = sum(math.hypot(q[0] - p0[0], q[1] - p0[1]) for p0, q in zip(ring, ring[1:]))
+    wall_f = max(6.0, min(20.0, turn_len / a.min_turn))   # slow enough to cool, never faster than 20
     for i in range(1, PTS + 1):
         frac = (t * PTS + i) / PTS                # turns completed, continuous
         z = z0 + frac * H
@@ -201,7 +233,7 @@ for t in range(turns):
         r = radius(th, z - ZO) - W * 0.5
         x, y = CX + r * math.cos(th), CY + r * math.sin(th)
         px, py = p.pos[0], p.pos[1]
-        p.move(x, y, z=z, de=math.hypot(x - px, y - py) * k, f=20.0)
+        p.move(x, y, z=z, de=math.hypot(x - px, y - py) * k, f=wall_f)
     if t % 10 == 0:
         p.percent(min(98, 10 + round(88 * t / turns)))
 

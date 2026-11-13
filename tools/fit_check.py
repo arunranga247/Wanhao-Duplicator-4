@@ -40,6 +40,8 @@ except Exception:                                   # noqa: BLE001 - also usable
 HERE = os.path.dirname(os.path.abspath(__file__))
 BED_X, BED_Y, MAX_Z = 225.0, 145.0, 140.0           # Duplicator 4 build volume (mm)
 MIN_WALL = 0.8                                      # 2 lines of a 0.4 mm nozzle
+MIN_GAP = 1.2                                       # narrower cuts / slots / button gaps can close up
+                                                    # (0.45 mm lines, squashed first layer)
 OVERHANG_COS = 0.707                                # steeper than 45 deg from vertical
 PALETTE = ["#4b5260", "#2f6fdf", "#d9480f", "#2b8a3e", "#ae3ec9", "#e8a317", "#0c8599", "#c92a2a",
            "#5f3dc4", "#868e96"]
@@ -231,7 +233,7 @@ def analyze(V, T, M, supports, thin_samples=1500):
     big_area, small_area = overhang_islands(V, T, np.where(over)[0], area)
     r = {"open_edges": int((cnt == 1).sum()), "nonmanifold_edges": int((cnt > 2).sum()),
          "overhang_area": big_area, "overhang_small": small_area, "contact_area": float(area[contact].sum()),
-         "watertight": M is not None, "bodies": [], "thin": [], "volume": None}
+         "watertight": M is not None, "bodies": [], "thin": [], "gaps": [], "volume": None}
     if M is None:
         return r
     r["volume"] = float(M.volume())
@@ -258,6 +260,17 @@ def analyze(V, T, M, supports, thin_samples=1500):
                 facing = float(np.dot(np.array(hits[0].normal), n[i]))
                 if 0.02 < d < MIN_WALL - 0.03 and facing < -0.85:
                     r["thin"].append([float(x) for x in p0] + [round(d, 2)])
+            # narrow GAP: shoot outward - an opposite wall of the same part closer than MIN_GAP means
+            # a slot / button cut / flex gap that may fill in or fuse when printed
+            try:
+                hits = M.ray_cast((p0 + n[i] * 0.005).tolist(), (p0 + n[i] * (MIN_GAP + 0.1)).tolist())
+            except Exception:                                  # noqa: BLE001
+                continue
+            if hits:
+                d = float(np.linalg.norm(np.array(hits[0].position) - p0))
+                facing = float(np.dot(np.array(hits[0].normal), n[i]))
+                if 0.05 < d < MIN_GAP - 0.03 and facing < -0.85:
+                    r["gaps"].append([float(x) for x in p0] + [round(d, 2)])
     return r
 
 
@@ -312,6 +325,14 @@ def part_checks(name, V, r, supports, brim, scale):
                         "3-D view) - may print weak or vanish" % (len(th), MIN_WALL, min(t[3] for t in th))))
         else:
             out.append(("OK", "Thin walls", "no wall thinner than %.1f mm (2 nozzle lines)" % MIN_WALL))
+        gp = r.get("gaps", [])
+        if gp:
+            out.append(("WARN", "Narrow gaps", "%d spot(s) where a gap / cut / slot is narrower than %.1f mm "
+                        "(narrowest %.2f mm, marked in the 3-D view) - may fill in or fuse when printed: make "
+                        "button cuts and flex gaps at least %.1f mm" % (len(gp), MIN_GAP, min(g[3] for g in gp),
+                                                                       MIN_GAP)))
+        else:
+            out.append(("OK", "Narrow gaps", "no gap or cut narrower than %.1f mm - cuts stay open" % MIN_GAP))
     return out
 
 
@@ -373,7 +394,7 @@ def main(argv=None):
     if mode == "single":
         p = parts[0]
         r = analyze(p["V"], p["T"], p["M"], a.supports)
-        p["thin"] = r["thin"][:400]
+        p["thin"] = (r["thin"] + r.get("gaps", []))[:400]       # orange markers: thin walls + narrow gaps
         for st, t, msg in part_checks(p["name"], p["V"], r, a.supports, a.brim, 100):
             checks.append({"status": st, "title": t, "msg": msg})
         lo, hi = p["V"].min(axis=0), p["V"].max(axis=0)

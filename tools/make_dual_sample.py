@@ -64,6 +64,7 @@ class Printer:
         self.retracted = [0.0, 0.0]
         self.time_s = 0.0
         self.last = None                 # last step position sent to the printer (head)
+        self.tilt_x = 0.0                # bed tilt compensation: extra Z (mm) per mm of nozzle X
 
     # ---- low level -------------------------------------------------------
     def _cmd(self, data, gcode=None):
@@ -77,8 +78,9 @@ class Printer:
 
     def _steps(self):
         hx = self.pos[0] + (LEFT_NOZZLE_DX if self.tool == 1 else 0.0)   # head position
+        z = self.pos[2] + self.tilt_x * self.pos[0]                       # follows a tilted bed
         return (round(hx * SPM["x"]), round(self.pos[1] * SPM["y"]),
-                round(self.pos[2] * SPM["z"]), round(EXTRUDE_SIGN * self.e[0] * SPM["a"]),
+                round(z * SPM["z"]), round(EXTRUDE_SIGN * self.e[0] * SPM["a"]),
                 round(EXTRUDE_SIGN * self.e[1] * SPM["b"]))
 
     def set_position(self, gcode):
@@ -136,6 +138,9 @@ class Printer:
 
     def wait_tool(self, tool):
         self._cmd(struct.pack("<BBHH", 135, tool, 100, 1200), "M6 T%d ; wait for heat" % tool)
+
+    def wait_bed(self, timeout_s=900):
+        self._cmd(struct.pack("<BBHH", 141, 0, 100, timeout_s), "M190 ; wait for bed heat")
 
     def change_tool(self, tool, f=60.0, shift=True):
         """Software tool change: no firmware command. With shift=True the head moves by

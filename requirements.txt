@@ -1,7 +1,12 @@
 # Duplicator 4 Studio - Python packages
-pyserial>=3.5        # USB link to the printer (s3g/x3g protocol)
-pillow>=10.0         # previews, icons, image display
-sv-ttk>=2.6          # Windows 11 style theme (optional: the app falls back to the plain look)
+pyserial>=3.5               # USB link to the printer (s3g/x3g protocol)
+pillow>=10.0                # previews, icons, image display
+pyside6-essentials>=6.8     # the app window (Qt for Python, LGPL) incl. the OpenGL 3D viewer
+numpy>=1.26                 # 3D model preview, print-path viewer, fit check
+manifold3d>=3.0             # fit check (3-D booleans) and the object designs
 
 # only needed to build Duplicator4Studio.exe
 pyinstaller>=6.10
+
+# only for the old Tk window (tools/d4_gui.py), not used by the app any more
+# sv-ttk>=2.6
