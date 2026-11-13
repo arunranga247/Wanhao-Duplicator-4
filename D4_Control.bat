@@ -1,4 +1,4 @@
 @echo off
-rem Wanhao Duplicator 4 - USB control panel
+rem Duplicator 4 Studio - start the app from source (Qt window)
 cd /d "%~dp0tools"
-start "" pythonw d4_gui.py
+start "" pythonw d4_qt.py

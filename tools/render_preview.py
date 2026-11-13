@@ -52,6 +52,8 @@ def decode(path):
             tool = c[1]
         elif k == 136 and c[2] == 3:
             info["temps"]["T%d" % c[1]] = max(info["temps"].get("T%d" % c[1], 0), struct.unpack("<h", c[4:6])[0])
+        elif k == 136 and c[2] == 31:
+            info["bed"] = max(info.get("bed", 0), struct.unpack("<h", c[4:6])[0])
         elif k == 155:
             tgt = list(struct.unpack("<5i", c[1:21]))
             rel = c[25]
@@ -175,7 +177,7 @@ def render(path, out=None):
     rows = [
         ("Commands", "%d" % info["n"]),
         ("Nozzle temps", ", ".join("%s %d °C" % kv for kv in sorted(info["temps"].items())) or "OFF"),
-        ("Bed", "not heated"),
+        ("Bed", "%d °C" % info["bed"] if info.get("bed") else "not heated"),
         ("Z homing", ("YES - slow, %.0f mm/s (safe)" % info["zspeed"] if info.get("zspeed", 99) <= 6 else
                       "YES - FAST %.0f mm/s (cut-out risk)" % info.get("zspeed", 0)) if info["zhome"] else
          ("NO - paper-test height = Z0, bed only moves DOWN" if info.get("zmoved") else "NO - bed never moves")),

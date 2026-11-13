@@ -13,6 +13,7 @@ MAX_MM_S = (150.0, 150.0, 19.0, 100.0, 100.0)   # conservative per-axis limits
 LEFT_NOZZLE_DX = 33.0                           # left nozzle sits 33 mm left of the head (right nozzle)
 FIXED = {131: 7, 132: 7, 133: 4, 134: 1, 135: 5, 137: 1, 140: 20, 141: 5,
          144: 1, 150: 2, 154: 1, 155: 31}
+BED_MAX_C = 70                                  # heated bed allowed up to this (PLA: 60)
 
 
 def main(path):
@@ -28,6 +29,7 @@ def main(path):
     counts = {}
     homed = xyhomed = zhomed = zmoved = False
     fil = [0.0, 0.0]
+    bed_max = 0
     while i < len(data):
         c = data[i]
         i += 1
@@ -41,7 +43,10 @@ def main(path):
                 v = struct.unpack("<h", payload)[0]
                 temps[("bed" if act == 31 else "T%d" % t)] = v
                 if act == 3 and v > 240: errors.append("nozzle temp %d too high" % v)
-                if act == 31 and v != 0: errors.append("bed heater turned ON (%d)" % v)
+                if act == 31:
+                    bed_max = max(bed_max, v)
+                    if v > BED_MAX_C:
+                        errors.append("bed %d C - more than %d C (PLA softens, bed sensor risk)" % (v, BED_MAX_C))
             continue
         if c == 153:
             j = data.index(0, i + 4)
@@ -128,6 +133,9 @@ def main(path):
     else:
         print("Z homing      : NO - bed is never moved")
     print("final temps   :", temps)
+    print("bed           : %s" % ("heated, up to %d C" % bed_max if bed_max else "not heated"))
+    if temps.get("bed", 0) != 0:
+        errors.append("bed heater is still ON (%d C) at the end of the file" % temps["bed"])
     print("filament pushed (incl. re-push after retract): right %.0f mm, left %.0f mm" % tuple(fil))
     print("RESULT        :", "OK" if not errors else "PROBLEMS:\n  " + "\n  ".join(errors[:20]))
 

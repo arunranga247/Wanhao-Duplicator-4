@@ -6,7 +6,8 @@ quirk of this printer is handled the same way:
   * extruder direction (EXTRUDE_SIGN), relative A/B moves
   * NO firmware tool change (bogus T1 offset) - nozzle spacing done in software
   * slow Z homing (5 mm/s, 40 s limit) with heaters OFF, heat only after homing works
-  * bed never heated (faulty bed sensor) - a G-code that asks for bed heat is rejected
+  * bed heated only when asked (bed=, max 70 C): bed first, then the nozzle; bed commands in the
+    G-code itself are ignored
   * prime line at the front, layer progress (M73-style) for the printer LCD
 
 Coordinates: PrusaSlicer bed is 0..225 x 0..145 (origin front-left); the printer's
@@ -27,6 +28,8 @@ import struct
 from make_dual_sample import SPM, Printer, prime_line
 
 BED_W, BED_D = 225.0, 145.0
+BED_MAX_C = 70                                   # PLA never needs more; above that it softens
+TILT_MAX = 0.5                                   # mm per 100 mm: more than this = level the bed
 CX, CY = BED_W / 2, BED_D / 2
 MAX_XY_F, MAX_Z_F, MAX_E_F = 100.0, 10.0, 25.0       # mm/s limits for this machine
 LEFT_DX = 33.0                                        # left nozzle sits 33 mm left of the head
@@ -79,15 +82,25 @@ SWAP_PURGE_MM = 6.0      # purge of the new nozzle (in the air, in front of the 
 
 
 def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, log=print,
-            color_z=None, tool2=None, temp2=None, first_temp=None):
+            color_z=None, tool2=None, temp2=None, first_temp=None, bed=0, tilt_x=0.0):
     """color_z: print every layer ABOVE this height (mm) with tool2 (the other extruder).
-    One colour change per print -> clean two-colour parts on a dual-nozzle machine."""
+    One colour change per print -> clean two-colour parts on a dual-nozzle machine.
+    bed: heated-bed temperature (0 = off). Only the converter sets it - bed commands inside the
+    G-code are ignored - and it is capped at BED_MAX_C.
+    tilt_x: bed tilt compensation, mm per 100 mm toward the RIGHT. + lifts the nozzle on the right
+    (right side squashed / paper tight), - lowers it (right side gap too big). Centre unchanged."""
+    if abs(tilt_x) > TILT_MAX:
+        raise ConvertError("tilt %.2f mm/100 mm refused - more than %.1f: level the bed with the knobs first"
+                           % (tilt_x, TILT_MAX))
     lines = open(gcode_path, encoding="utf-8", errors="replace").read().splitlines()
     info = scan(lines)
-    if info["bed"] > 0:
-        raise ConvertError("G-code heats the bed to %d C - the bed sensor is faulty, bed heating "
-                           "is not allowed. Set bed temperature 0." % info["bed"])
-    if not info["temps"]:
+    bed = int(bed or 0)
+    if not 0 <= bed <= BED_MAX_C:
+        raise ConvertError("bed temperature %d C refused - 0 (off) to %d C for PLA" % (bed, BED_MAX_C))
+    if info["bed"] > 0 and not bed:
+        raise ConvertError("G-code heats the bed to %d C - choose the bed temperature in this app "
+                           "(bed option) and set it 0 in the slicer." % info["bed"])
+    if not info["temps"] and not first_temp:
         raise ConvertError("no nozzle temperature found in the G-code")
     x0, y0, x1, y1 = info["bbox"]
     if x0 > x1:
@@ -103,6 +116,7 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     name = (name or os.path.splitext(os.path.basename(out_path))[0])[:20]
 
     p = Printer()
+    p.tilt_x = tilt_x / 100.0
     p._cmd(struct.pack("<BI", 153, 0) + name.encode("ascii", "replace") + b"\0")
     p.percent(0)
     p.set_bed(0)
@@ -119,6 +133,9 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
         if color_z >= info["zmax"]:
             raise ConvertError("colour change at Z %.2f mm is above the top of the model (%.2f mm)"
                                % (color_z, info["zmax"]))
+    if bed:
+        p.set_bed(bed)                                 # bed first (slow); nozzle heats after it,
+        p.wait_bed()                                   # so the nozzle does not ooze while waiting
     p.set_temp(tool, first_temp)
     if two_colour:
         p.set_temp(tool2, STANDBY_C)                   # second colour waits warm, not hot

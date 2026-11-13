@@ -22,6 +22,9 @@ POLL_PRINT_S = 1.0
 
 # Heater watchdog: a heater with a target must rise this much within this time
 WD_RISE_C, WD_WINDOW_S = 8, 90
+# bed: heats slowly (big plate), so its own rule - at least +2 C in 120 s while below target - 5
+BED_RISE_C, BED_WINDOW_S = 2, 120
+BED_OVER_C, BED_HARD_MAX_C, BED_JUMP_C = 12, 80, 8      # over-temperature / sudden-jump limits
 
 
 # =============================================================================
@@ -266,9 +269,9 @@ class Worker(threading.Thread):
             r = self.link.send(c)
             if r[0] == s3g.OK:
                 job["i"] += 1
-                if c[0] == 135:                       # wait-for-heat command now queued
-                    job["heat_wait"] = c[1]
-                    self.post("phase", "heat", c[1])
+                if c[0] in (135, 141):                # wait-for-heat (nozzle / bed) now queued
+                    job["heat_wait"] = c[1] if c[0] == 135 else "bed"
+                    self.post("phase", "heat", job["heat_wait"])
                     break
             elif r[0] == s3g.BUSY:
                 time.sleep(0.03)
@@ -300,24 +303,37 @@ class Worker(threading.Thread):
             cur, tgt = t.get(key), t.get(key + "_t")
             if not tgt:
                 self.wd.pop(key, None)
+                if key == "bed":
+                    self._bed_prev = None
                 continue
             if cur is None:
                 continue
             if cur < 5:
                 self._heater_fault("%s sensor reads %d C while heating - sensor fault" % (name, cur))
                 return
+            if key == "bed":                  # the bed sensor has had loose-wire faults
+                prev = getattr(self, "_bed_prev", None)
+                self._bed_prev = cur
+                if cur > min(BED_HARD_MAX_C, tgt + BED_OVER_C):
+                    self._heater_fault("Bed reads %d C, far above its target %d C - bed heater off"
+                                       % (cur, tgt))
+                    return
+                if prev is not None and abs(cur - prev) > BED_JUMP_C:
+                    self._heater_fault("Bed reading jumped %d -> %d C - loose sensor wire?" % (prev, cur))
+                    return
             if key not in self.wd:            # heating started outside this app (LCD)
                 self.wd[key] = None
             if self.wd[key] is None:
                 self.wd[key] = (now, cur)
                 continue
             t0, c0 = self.wd[key]
+            rise, window = (BED_RISE_C, BED_WINDOW_S) if key == "bed" else (WD_RISE_C, WD_WINDOW_S)
             if cur >= tgt - 5:                 # reached target: re-arm window
                 self.wd[key] = (now, cur)
-            elif now - t0 > WD_WINDOW_S:
-                if cur - c0 < WD_RISE_C:
+            elif now - t0 > window:
+                if cur - c0 < rise:
                     self._heater_fault("%s rose only %d C in %d s (target %d C) - heater or sensor fault"
-                                       % (name, cur - c0, WD_WINDOW_S, tgt))
+                                       % (name, cur - c0, window, tgt))
                     return
                 self.wd[key] = (now, cur)
 
@@ -336,7 +352,21 @@ class Worker(threading.Thread):
         t = L.temps()
         pos, es, steps = L.position()
         st = L.board_status()
-        self._watchdog(t)
+        try:
+            paused = L.build_state() in (3, 5)       # LCD pause: firmware may switch heaters off
+        except Exception:                             # noqa: BLE001 - older firmware: assume not
+            paused = False
+        if paused:
+            if not getattr(self, "_paused", False):
+                self.log("Printer paused - heater 'not heating' checks wait until it resumes")
+            self._paused = True
+            self.wd.clear()                           # re-armed fresh after the resume
+            self._bed_prev = None
+        else:
+            if getattr(self, "_paused", False):
+                self.log("Printer resumed - heater checks restart")
+            self._paused = False
+            self._watchdog(t)
         if tuple(steps[:3]) == s3g.HOME_STEPS[:3]:
             self.homed = True                  # home offsets recalled after a full home
         self.post("status", {"t": t, "pos": pos, "es": es, "board": st, "homed": self.homed})

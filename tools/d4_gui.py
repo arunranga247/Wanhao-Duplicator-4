@@ -92,6 +92,8 @@ def windows_uses_light_theme():
 THEME_CHOICE = load_settings().get("theme", "System")          # System / Light / Dark
 THEME = ("light" if windows_uses_light_theme() else "dark") if THEME_CHOICE == "System"     else THEME_CHOICE.lower()
 COL = dict(PALETTES.get(THEME, PALETTES["dark"]))
+BED_MAX_C = 70                  # PLA never needs more; matches gcode2x3g / stream_x3g limits
+BED_MIN_PLAUSIBLE_C = 15        # a bed reading below room temperature = broken sensor wire
 
 # ---- objects the Prepare tab can make ---------------------------------------------
 # param: (cli flag, label, default, min, max, step)
@@ -185,6 +187,8 @@ class ScrollFrame(tk.Frame):
         self.columnconfigure(0, weight=1)
         self.canvas.bind("<Configure>", self._fit)
         self.inner.bind("<Configure>", self._fit)
+        self.inner.scroller = self
+        self.keep = []                  # widgets that must never be squeezed (scroll to them instead)
 
     MIN_W, MIN_H = 1100, 500        # the layout squeezes nicely down to this; below it, scroll
 
@@ -192,8 +196,11 @@ class ScrollFrame(tk.Frame):
         cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
         if cw < 10 or ch < 10:
             return
+        # previews / charts may shrink, but e.g. the Prepare settings column (with the Generate
+        # button at its bottom) must stay whole - it was cut off on 768-pixel-high screens
+        need_h = max([self.MIN_H] + [k.winfo_reqheight() + 30 for k in self.keep])
         rw = min(self.inner.winfo_reqwidth(), self.MIN_W)
-        rh = min(self.inner.winfo_reqheight(), self.MIN_H)
+        rh = min(self.inner.winfo_reqheight(), need_h)
         w, h = max(cw, rw), max(ch, rh)
         self.canvas.itemconfigure(self.win, width=w, height=h)
         self.canvas.configure(scrollregion=(0, 0, w, h))
@@ -258,6 +265,7 @@ class GButton(tk.Button):
              "danger": ("danger", None, "danger2")}
 
     def __init__(self, master, text, command, kind="filled", size=11, **kw):
+        self._kind = kind
         bg, fg, hover = self.KINDS[kind]
         self._bg, self._hover = COL[bg], COL[hover]
         fgc = COL[fg] if fg else "#ffffff"
@@ -275,6 +283,15 @@ class GButton(tk.Button):
 
     def instate(self, spec):
         return ("disabled" in spec) == (self["state"] == "disabled")
+
+    def retheme(self):
+        """Take the colours of the current theme (live theme change)."""
+        bg, fg, hover = self.KINDS[self._kind]
+        self._bg, self._hover = COL[bg], COL[hover]
+        fgc = COL[fg] if fg else "#ffffff"
+        off = self["state"] == "disabled"
+        self.configure(bg=COL["btn_dis"] if off else self._bg, fg=fgc, activebackground=self._hover,
+                       activeforeground=fgc, disabledforeground=COL["dis_fg"])
 
 
 def fmt_min(s):
@@ -358,7 +375,8 @@ class App(tk.Tk):
             if "load_temp" in u:
                 self.fil_temp.set(u["load_temp"])
             self.keep_hot.set(bool(u.get("keep_hot", False)))
-            # bed_ok is deliberately NOT restored: bed heating stays blocked at every start
+            # bed_ok is deliberately NOT restored: it starts ON (sensor tested) - switch it off if
+            # the bed reading ever looks wrong again
             if u.get("object") in OBJECTS:
                 self.obj_var.set(u["object"])
                 self._build_params()
@@ -575,7 +593,7 @@ class App(tk.Tk):
             self.t_tgt[key].pack(anchor="w")
             self.t_lbl[key] = ttk.Label(f, text="---°", style="Big.TLabel", width=4, anchor="e")
             self.t_lbl[key].grid(row=r0, column=2, padx=(4, 10))
-            e = ttk.Spinbox(f, from_=0, to=(240 if key != "bed" else 110), width=4, increment=5)
+            e = ttk.Spinbox(f, from_=0, to=(240 if key != "bed" else BED_MAX_C), width=4, increment=5)
             e.set(default)
             e.grid(row=r0, column=3, padx=2)
             self.t_entry[key] = e
@@ -584,8 +602,8 @@ class App(tk.Tk):
             bar = GBar(f, color=COL[key], height=6)
             bar.grid(row=r0 + 1, column=1, columnspan=5, sticky="ew", pady=(2, 10))
             self.t_bar[key] = bar
-        self.bed_ok = tk.BooleanVar(value=False)
-        ttk.Checkbutton(f, text="Bed sensor repaired (allow bed heating)", variable=self.bed_ok,
+        self.bed_ok = tk.BooleanVar(value=True)        # bed sensor repaired + heat test passed 2026-11-10
+        ttk.Checkbutton(f, text="Allow bed heating (bed sensor tested OK, watchdog on)", variable=self.bed_ok,
                         style="Switch.TCheckbutton" if sv_ttk else "TCheckbutton").grid(
             row=6, column=0, columnspan=6, sticky="w", pady=(2, 0))
         bb = ttk.Frame(f)
@@ -722,13 +740,25 @@ class App(tk.Tk):
 
     # ======================= PREPARE TAB ===========================================
     def _build_prepare_tab(self, tab):
-        tab.columnconfigure(0, weight=2, uniform="p")
-        tab.columnconfigure(1, weight=3, uniform="p")
+        # settings column takes the width its contents need (a fixed 2/5 share clipped the second
+        # column of settings and the buttons on smaller screens); the preview gets the rest
+        tab.columnconfigure(0, weight=0)
+        tab.columnconfigure(1, weight=1, minsize=320)
         tab.rowconfigure(0, weight=1)
         left = tk.Frame(tab, bg=COL["page"])
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self._prep_scroller = getattr(tab, "scroller", None)
+        if self._prep_scroller:
+            self._prep_scroller.keep.append(left)
         right = tk.Frame(tab, bg=COL["page"])
-        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        right.grid(row=0, column=1, sticky="new", padx=(6, 0))
+        # the preview is as tall as the VISIBLE window, not the (scrolling) settings column, so the
+        # model is never centred below the bottom edge
+        right.pack_propagate(False)
+        if self._prep_scroller:
+            cv = self._prep_scroller.canvas
+            cv.bind("<Configure>", lambda e: right.configure(height=max(240, cv.winfo_height())), add="+")
+        right.configure(height=600)
 
         f = self._panel(left, "1. Choose an object")
         f.pack(fill="x")
@@ -766,7 +796,12 @@ class App(tk.Tk):
         self.gen_preview = tk.Label(p, bg=COL["canvas"], text="Generate an object to see its preview",
                                     fg=COL["dim"], font=("Segoe UI", 11))
         self.gen_preview.pack(fill="both", expand=True)
-        self.gen_preview.bind("<Configure>", lambda e: self._show_image(self.gen_preview, "_gen_src"))
+        self.gen_preview.bind("<Configure>", lambda e: self._gen_preview_resized())
+        self.gen_preview.bind("<ButtonPress-1>", self._view_press)
+        self.gen_preview.bind("<B1-Motion>", self._view_drag)
+        self.gen_preview.bind("<ButtonRelease-1>", lambda e: self._model_sharp(delay=60))
+        self.gen_preview.bind("<MouseWheel>", self._view_wheel)
+        self.gen_preview.bind("<Double-Button-1>", self._view_reset)
         self._build_params()
 
     def _build_params(self):
@@ -786,16 +821,21 @@ class App(tk.Tk):
             # the model file comes first: it is what the user picks before anything else
             ttk.Label(pp, text="3D model file", font=("Segoe UI Semibold", 10)).grid(
                 row=0, column=0, sticky="w", pady=(0, 6))
-            mf = ttk.Frame(pp)
-            mf.grid(row=0, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=(0, 6))
-            ttk.Entry(mf, textvariable=self.model_var).pack(side="left", fill="x", expand=True)
+            # path box on its own row, buttons on the next one: three buttons beside the path did
+            # not fit the left column and "Assembly…" was cut off at the frame edge
+            ttk.Entry(pp, textvariable=self.model_var).grid(
+                row=0, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=(0, 4))
+            mf = ttk.Frame(pp, style="Panel.TFrame")
+            mf.grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 8))
             GButton(mf, "📂 Browse…", self.pick_model, kind="tonal", size=10, padx=12, pady=4).pack(
-                side="left", padx=(6, 0))
+                side="left")
             GButton(mf, "🔍 Fit check", self.fit_check, kind="tonal", size=10, padx=12, pady=4).pack(
                 side="left", padx=(6, 0))
             GButton(mf, "🧩 Assembly…", self.fit_check_assembly, kind="tonal", size=10, padx=12, pady=4).pack(
                 side="left", padx=(6, 0))
-            r0 = 1
+            r0 = 2
+            self.model_var.trace_add("write", lambda *_: self._queue_model_preview())
+            self._queue_model_preview()
         params = obj["params"]
         two_col = len(params) > 5                       # long lists: two columns, no range hints
         for i, (flag, label, default, lo, hi, step) in enumerate(params):
@@ -823,6 +863,146 @@ class App(tk.Tk):
         self.gen_name.insert(0, saved.get("_name", obj["name"]))
         if obj.get("fixed_name"):
             self.gen_name.configure(state="disabled")
+        if getattr(self, "_prep_scroller", None):      # settings list changed size: refit the page
+            self.after_idle(self._prep_scroller._fit)
+
+    # ---- 3D viewer of the chosen model (before slicing): drag = turn, wheel = zoom ------------
+    VIEW0 = {"yaw": -35.0, "pitch": 28.0, "zoom": 1.0}
+
+    def _queue_model_preview(self):
+        """Path changed (Browse, typed, restored): load it after a short pause."""
+        if getattr(self, "_mprev_after", None):
+            self.after_cancel(self._mprev_after)
+        self._mprev_after = self.after(400, self._start_model_preview)
+
+    def _start_model_preview(self):
+        self._mprev_after = None
+        m = self.model_var.get().strip().strip('"')
+        if not os.path.isfile(m) or os.path.splitext(m)[1].lower() not in (".stl", ".3mf", ".obj"):
+            return
+        key = "%s|%s" % (m, os.path.getmtime(m))
+        if key == getattr(self, "_mprev_key", None):
+            if getattr(self, "_scene", None):          # same model: just show the viewer again
+                self._gen_mode = "model"
+                self._model_sharp()
+            return
+        self._mprev_key = key
+        self._scene = None
+        self._view = dict(self.VIEW0)
+        self.gen_preview.configure(image="", text="Loading %s …" % os.path.basename(m), cursor="")
+        self.gen_preview._img = None
+        w, h = self._viewer_size()
+        threading.Thread(target=self._model_load_worker, args=(m, key, w, h), daemon=True).start()
+
+    def _viewer_size(self):
+        return max(120, self.gen_preview.winfo_width() - 8), max(90, self.gen_preview.winfo_height() - 8)
+
+    def _model_load_worker(self, model, key, w, h):
+        try:
+            import model_preview
+            sc = model_preview.Scene(model)
+            img = sc.image(w, h, bg=COL["canvas"], **self.VIEW0)
+            self.events.put(("model_scene", key, model, sc, img, None))
+        except Exception as e:                      # noqa: BLE001 - shown in the preview box
+            self.events.put(("model_scene", key, model, None, None, "%s: %s" % (type(e).__name__, e)))
+
+    def on_model_scene(self, key, model, scene, img, err):
+        if key != getattr(self, "_mprev_key", None):
+            return                                  # an older request; a newer one is on its way
+        if err:
+            self._mprev_key = None
+            self.gen_preview.configure(image="", text="Can't show %s\n%s" % (os.path.basename(model), err))
+            self.gen_preview._img = None
+            return
+        self._scene, self._gen_mode = scene, "model"
+        self._show_pil(img)
+        # the first picture was sized while the window was still laying out; if the box is a
+        # different size now, draw it again to fit (otherwise a narrow strip / tiny model stays)
+        w, h = self._viewer_size()
+        if abs(img.size[0] - w) > 4 or abs(img.size[1] - h) > 4:
+            self._model_sharp()
+        self.gen_preview.configure(cursor="fleur")
+        self.gen_to_print.pack_forget()
+        self.gen_status.configure(
+            text="📦 %s\n%s\n🖱 Drag to turn  ·  wheel to zoom  ·  double-click to reset the view"
+                 % (os.path.basename(model), scene.info),
+            foreground=COL["r"] if "TOO BIG" in scene.info else COL["dim"])
+
+    def _show_pil(self, img):
+        tkimg = ImageTk.PhotoImage(img)
+        self.gen_preview.configure(image=tkimg, text="")
+        self.gen_preview._img = tkimg
+
+    def _viewer_on(self):
+        return getattr(self, "_gen_mode", "") == "model" and getattr(self, "_scene", None) is not None
+
+    def _model_fast(self):
+        """Quick frame while the mouse moves (drawn right here, ~0.1 s)."""
+        self._drag_after = None
+        if not self._viewer_on():
+            return
+        w, h = self._viewer_size()
+        self._model_token = getattr(self, "_model_token", 0) + 1     # a sharp frame in flight is now old
+        self._show_pil(self._scene.image(w, h, bg=COL["canvas"], fast=True, **self._view))
+        self._model_sharp(delay=250)
+
+    def _model_sharp(self, delay=0):
+        """Sharp frame (smooth edges, outlines) drawn in the background once the mouse rests."""
+        if getattr(self, "_sharp_after", None):
+            self.after_cancel(self._sharp_after)
+            self._sharp_after = None
+        if delay:
+            self._sharp_after = self.after(delay, self._model_sharp)
+            return
+        if not self._viewer_on():
+            return
+        self._model_token = getattr(self, "_model_token", 0) + 1
+        tok, sc, view = self._model_token, self._scene, dict(self._view)
+        w, h = self._viewer_size()
+
+        def work():
+            try:
+                img = sc.image(w, h, bg=COL["canvas"], **view)
+                self.events.put(("model_img", tok, img))
+            except Exception:                       # noqa: BLE001 - keep the quick frame
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_model_img(self, tok, img):
+        if tok == getattr(self, "_model_token", None) and self._viewer_on():
+            self._show_pil(img)
+
+    def _view_press(self, e):
+        self._drag0 = (e.x, e.y, self._view["yaw"], self._view["pitch"])
+
+    def _view_drag(self, e):
+        if not self._viewer_on() or not getattr(self, "_drag0", None):
+            return
+        x0, y0, yaw0, pitch0 = self._drag0
+        self._view["yaw"] = (yaw0 - (e.x - x0) * 0.5) % 360
+        self._view["pitch"] = max(-85.0, min(89.0, pitch0 + (e.y - y0) * 0.4))
+        if not getattr(self, "_drag_after", None):
+            self._drag_after = self.after(15, self._model_fast)
+
+    def _view_wheel(self, e):
+        if not self._viewer_on():
+            return None                             # no model shown: let the page scroll
+        f = 1.15 ** (e.delta / 120.0)
+        self._view["zoom"] = max(0.3, min(12.0, self._view["zoom"] * f))
+        if not getattr(self, "_drag_after", None):
+            self._drag_after = self.after(15, self._model_fast)
+        return "break"
+
+    def _view_reset(self, _e=None):
+        if self._viewer_on():
+            self._view = dict(self.VIEW0)
+            self._model_sharp()
+
+    def _gen_preview_resized(self):
+        if self._viewer_on():
+            self._model_sharp(delay=150)
+        else:
+            self._show_image(self.gen_preview, "_gen_src")
 
     def pick_model(self):
         p = filedialog.askopenfilename(
@@ -946,7 +1126,8 @@ class App(tk.Tk):
             ok, ctext = self._run_checker(path)
             prev = os.path.join(PREV, name + ".png")
             rp.render(path, out=prev)
-            st = s3g.x3g_stats(s3g.split_x3g(open(path, "rb").read()))
+            with open(path, "rb") as fh:
+                st = s3g.x3g_stats(s3g.split_x3g(fh.read()))
             short = "Print time ≈ %s + heat-up   ·   filament R %.0f / L %.0f mm   ·   object height %.1f mm" % (
                 fmt_min(st["time_s"]), st["fil"][0], st["fil"][1], st["zprint"])
             if not ok:     # on failure show the checker's problem lines
@@ -967,6 +1148,8 @@ class App(tk.Tk):
             self.gen_status.configure(text="❌ %s: problem.\n%s" % (name, text), foreground=COL["r"])
         prev = os.path.join(PREV, name + ".png")
         if os.path.exists(prev):
+            self._gen_mode = "file"                 # show the sliced tool paths, not the 3D viewer
+            self.gen_preview.configure(cursor="")
             self._gen_src = prev
             self._show_image(self.gen_preview, "_gen_src")
         self.log("Generated %s.x3g (%s)" % (name, "check OK" if ok else "CHECK FAILED"), "ok" if ok else "alarm")
@@ -1053,7 +1236,8 @@ class App(tk.Tk):
         c = self._stats_cache.get(path)
         if c and c[0] == mt:
             return c[1]
-        st = s3g.x3g_stats(s3g.split_x3g(open(path, "rb").read()))
+        with open(path, "rb") as fh:
+            st = s3g.x3g_stats(s3g.split_x3g(fh.read()))
         self._stats_cache[path] = (mt, st)
         return st
 
@@ -1144,7 +1328,7 @@ class App(tk.Tk):
             "%s    %d commands" % (os.path.basename(path), st["n"]),
             "Print time ≈ %s (+ heat-up)    filament R %.0f mm / L %.0f mm    object height %.1f mm" % (
                 fmt_min(st["time_s"]), st["fil"][0], st["fil"][1], st["zprint"]),
-            "Nozzles: %s    Bed: %s" % (temps or "off", ("%d°C ⚠ bed sensor faulty!" % st["bed"]) if st["bed"] else "not heated"),
+            "Nozzles: %s    Bed: %s" % (temps or "off", ("%d°C" % st["bed"]) if st["bed"] else "not heated"),
             "Z homing: %s" % {"slow": "slow 5 mm/s (safe)", "fast": "FAST - caused cut-outs on this printer ⚠",
                               None: "none (bed height used as is)"}[st["z_home"]],
         ]
@@ -1200,9 +1384,10 @@ class App(tk.Tk):
                                  "be printed:\n\n" + cc[2])
             return
         if st["bed"] and not self.bed_ok.get():
-            messagebox.showerror("Bed heating blocked", "This file heats the bed to %d °C, but the bed "
-                                 "sensor is faulty. The print would wait forever and overheat the bed.\n\n"
-                                 "Use a file with an unheated bed." % st["bed"])
+            messagebox.showerror("Bed heating blocked", "This file heats the bed to %d °C, but bed heating "
+                                 "is switched OFF in the Printer tab ('Allow bed heating').\n\n"
+                                 "Switch it on if the bed reads room temperature correctly, or use a "
+                                 "file made with bed 0." % st["bed"])
             return
         if st["t1_change"]:
             messagebox.showerror("Unsafe file", "This file uses a firmware T1 tool change. Your printer's "
@@ -1227,7 +1412,8 @@ class App(tk.Tk):
 
     def _checklist(self, path, st):
         uses = [n for t, n in ((0, "RIGHT"), (1, "LEFT")) if st["fil"][t] > 1]
-        items = ["Bed is clean and has blue tape or glue stick (bed is not heated)",
+        items = [("Bed is clean and has a thin layer of glue stick (bed heats to %d °C - don't touch it)"
+                  % st["bed"]) if st["bed"] else "Bed is clean and has blue tape or glue stick (bed is not heated)",
                  "Old prints are removed from the bed"]
         if uses:
             items.append("Filament is loaded in the %s extruder%s" % (" and ".join(uses), "s" if len(uses) > 1 else ""))
@@ -1334,7 +1520,14 @@ class App(tk.Tk):
                                        "Heating the bed with a broken sensor can overheat it.\n"
                                        "Repair the sensor, then tick 'Bed sensor repaired'.")
                 return
-            self.worker.submit("set_bed", max(0, min(110, c)))
+            now = (getattr(self, "_last_temps", None) or {}).get("bed")
+            if c > 0 and now is not None and now < BED_MIN_PLAUSIBLE_C:
+                messagebox.showwarning("Bed heating blocked",
+                                       "The bed sensor reads %s °C - below room temperature.\n"
+                                       "The sensor wire is probably broken, so the bed could overheat.\n"
+                                       "Repair the wire and run the supervised bed test first." % now)
+                return
+            self.worker.submit("set_bed", max(0, min(BED_MAX_C, c)))
         else:
             self.worker.submit("set_temp", 0 if key == "r" else 1, max(0, min(240, c)))
 
@@ -1442,11 +1635,11 @@ class App(tk.Tk):
         if kind == "heat":
             self.heat_phase = tool
             self._show_heat()
-            self.log("Heating the %s nozzle - printing starts when it is hot"
-                     % ("right" if tool == 0 else "left"))
+            self.log("Heating the %s - printing starts when it is hot"
+                     % ("bed" if tool == "bed" else "right nozzle" if tool == 0 else "left nozzle"))
         else:
             if self.heat_phase is not None:
-                self.log("Nozzle hot - printing", "ok")
+                self.log("Hot - printing", "ok")
             self.heat_phase = None
             self.job_name.configure(text="▶ Printing - " + getattr(self, "job_file", ""))
 
@@ -1454,12 +1647,12 @@ class App(tk.Tk):
         tool = getattr(self, "heat_phase", None)
         if tool is None or not self.printing:
             return
-        key = "r" if tool == 0 else "l"
+        key = "bed" if tool == "bed" else "r" if tool == 0 else "l"
         t = getattr(self, "_last_temps", {}) or {}
         cur, tgt = t.get(key), t.get(key + "_t")
-        side = "right" if tool == 0 else "left"
+        what = "bed" if tool == "bed" else ("right" if tool == 0 else "left") + " nozzle"
         temp = " %s° → %s°" % (cur, tgt) if cur is not None and tgt else ""
-        self.job_name.configure(text="🔥 Heating %s nozzle%s - print starts when hot" % (side, temp))
+        self.job_name.configure(text="🔥 Heating %s%s - print starts when hot" % (what, temp))
 
     def on_print_done(self, ok, msg):
         self.printing = False
@@ -1572,22 +1765,125 @@ class App(tk.Tk):
         except OSError:
             pass
 
+    # ---- theme: switched live, in this window (no restart) ---------------------------------
+    # Several colour slots share one value in a theme (e.g. light page = field = button hover),
+    # so each kind of option says which slot it most likely holds.
+    _PREF_BG = ["page", "bg", "border", "field", "btn", "off", "grid", "tonal", "canvas", "panel",
+                "status", "trough", "btn_dis", "btn_active"]
+    _PREF_FG = ["fg", "dim", "on_accent", "tonal_fg", "dis_fg", "off"]
+    _PREF_ACT = ["btn_active", "accent2", "danger2", "grid"]
+    _PREF_ITEM = ["off", "ok", "dim", "on_accent", "fg", "trough", "grid"]
+    _OPTS = {"background": "bg", "highlightbackground": "bg", "highlightcolor": "bg",
+             "selectbackground": "bg", "troughcolor": "bg", "readonlybackground": "bg",
+             "foreground": "fg", "disabledforeground": "fg", "activeforeground": "fg",
+             "insertbackground": "fg", "selectforeground": "fg", "activebackground": "act"}
+
+    @staticmethod
+    def _colour_map(old, new, pref):
+        m = {}
+        for k in pref + [k for k in old if k not in pref]:
+            m.setdefault(old[k].lower(), new[k])
+        return m
+
     def change_theme(self):
         choice = self.theme_var.get()
         if choice == THEME_CHOICE:
             return
-        if self.printing:
-            messagebox.showinfo("Theme", "Change the theme after the print has finished.")
-            self.theme_var.set(THEME_CHOICE)
-            return
+        # run after the drop-down has closed (its list window is rebuilt below)
+        self.after_idle(lambda: self.apply_theme(choice))
+
+    def apply_theme(self, choice):
+        global THEME, THEME_CHOICE
+        new_theme = ("light" if windows_uses_light_theme() else "dark") if choice == "System" else choice.lower()
         save_settings(theme=choice)
-        self.save_ui()                                  # keep everything across the restart
-        self.log("Theme set to %s - restarting the window" % choice)
-        # restart this program; the printer itself is not touched (heaters/motion unchanged)
-        cmd = [sys.executable] if d4_paths.FROZEN else [sys.executable, os.path.abspath(__file__)]
-        subprocess.Popen(cmd, cwd=d4_paths.EXE_DIR if d4_paths.FROZEN else TOOLS)
-        self.worker.quit.set()
-        self.destroy()
+        THEME_CHOICE = choice
+        if new_theme == THEME:
+            self.log("Theme set to %s" % choice)
+            return
+        old, new = dict(COL), dict(PALETTES[new_theme])
+        maps = {"bg": self._colour_map(old, new, self._PREF_BG),
+                "fg": self._colour_map(old, new, self._PREF_FG),
+                "act": self._colour_map(old, new, self._PREF_ACT),
+                "item": self._colour_map(old, new, self._PREF_ITEM)}
+        self.configure(cursor="watch")                  # ~1 s while Tk repaints every widget
+        self.update_idletasks()
+        try:
+            # 1. work out every plain widget's new colour while the old colours are still there
+            plan = []
+            self._plan_recolour(self, maps, plan)
+            # 2. switch: ttk widgets + styles. The Windows-11 theme also repaints plain widgets with
+            #    its own palette (tk_setPalette) when it gets the change event - let that finish ...
+            THEME = new_theme
+            COL.clear()
+            COL.update(new)
+            self._style()
+            self.update()
+            # 3. ... then put our colours on top, so the result never depends on timing
+            self.configure(bg=COL["page"])
+            for kind, w, a1, a2 in plan:
+                try:
+                    if kind == "opt":
+                        w.configure(**{a1: a2})
+                    elif kind == "item":
+                        w.itemconfigure(a1[0], **{a1[1]: a2})
+                    elif kind == "gbutton":
+                        w.retheme()
+                    elif kind == "gbar":
+                        w.color = a2
+                        w._draw()
+                except tk.TclError:
+                    pass                                # widget closed meanwhile
+            self._fix_bg()                              # ttk labels take their new parent colour
+            self.logbox.tag_configure("alarm", foreground=COL["danger"])
+            self.logbox.tag_configure("ok", foreground=COL["ok"])
+            try:
+                self.draw_chart()
+            except Exception:                           # noqa: BLE001 - chart redraws on next status
+                pass
+            if self._viewer_on():
+                self._model_sharp()                     # 3D viewer: new background
+            self.log("Theme set to %s" % choice)
+        except Exception:                               # noqa: BLE001
+            import traceback
+            _crash_log("theme change: " + traceback.format_exc())
+            self.log("Theme saved as %s - some colours update after reopening the program" % choice, "alarm")
+        finally:
+            self.after(50, lambda: self.configure(cursor=""))
+
+    def _plan_recolour(self, w, maps, plan):
+        """Collect (kind, widget, option, new colour) for every plain tk widget / canvas item."""
+        for c in w.winfo_children():
+            if isinstance(c, GButton):
+                plan.append(("gbutton", c, None, None))
+            else:
+                if isinstance(c, ttk.Combobox):         # its drop-down list (made by Tk itself) is
+                    pd = str(c) + ".popdown"            # rebuilt in the new colours next time it opens
+                    try:
+                        if int(self.tk.call("winfo", "exists", pd)):
+                            self.tk.call("destroy", pd)
+                    except tk.TclError:
+                        pass
+                for opt, kind in self._OPTS.items():
+                    try:
+                        v = c.cget(opt)
+                    except (tk.TclError, ValueError):
+                        continue
+                    nv = maps[kind].get(str(v).lower()) if v else None
+                    if nv:
+                        plan.append(("opt", c, opt, nv))
+                if isinstance(c, GBar):
+                    plan.append(("gbar", c, None, maps["item"].get(str(c.color).lower(), c.color)))
+                elif isinstance(c, tk.Canvas):
+                    for item in c.find_all():
+                        for opt in ("fill", "outline"):
+                            try:
+                                v = c.itemcget(item, opt)
+                            except tk.TclError:
+                                continue
+                            nv = maps["item"].get(v.lower()) if v else None
+                            if nv:
+                                plan.append(("item", c, (item, opt), nv))
+            self._plan_recolour(c, maps, plan)
 
     def on_close(self):
         if self.printing and not messagebox.askyesno(
@@ -1632,6 +1928,18 @@ def selftest():
             ok_all &= ok
             lines.append("%-18s %s  %s" % ("fit_check.py", "PASS" if ok else "FAIL",
                                            "" if ok else (serr.strip() or sout.strip())[-160:]))
+        # 3D model preview (Prepare tab, shown as soon as a model is chosen)
+        if os.path.exists(model):
+            try:
+                import model_preview
+                png = os.path.join(tmp, "prev.png")
+                info = model_preview.render(model, png)
+                ok = os.path.exists(png) and os.path.getsize(png) > 5000 and "mm" in info
+                msg = "" if ok else info
+            except Exception as e:                  # noqa: BLE001
+                ok, msg = False, "%s: %s" % (type(e).__name__, e)
+            ok_all &= ok
+            lines.append("%-18s %s  %s" % ("model_preview.py", "PASS" if ok else "FAIL", msg[:160]))
     lines.append("OVERALL: %s" % ("PASS" if ok_all else "FAIL"))
     with open(os.path.join(d4_paths.OUT, "selftest.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -1667,8 +1975,17 @@ if __name__ == "__main__":
         sys.stdout = open(os.devnull, "w")
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+    try:                                            # hard crashes (inside numpy/Tcl...) leave a trace too
+        import faulthandler
+        faulthandler.enable(open(os.path.join(d4_paths.OUT, "crash_log.txt"), "a", encoding="utf-8"))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    threading.excepthook = lambda a: _crash_log("thread %s: %s\n" % (
+        getattr(a.thread, "name", "?"), "".join(__import__("traceback").format_exception(
+            a.exc_type, a.exc_value, a.exc_traceback))))
     try:
-        App().mainloop()
+        app = App()
+        app.mainloop()
     except Exception:                               # noqa: BLE001 - startup failure
         import traceback
         tb = traceback.format_exc()
@@ -1681,3 +1998,15 @@ if __name__ == "__main__":
         except Exception:                           # noqa: BLE001
             pass
         sys.exit(1)
+    # Window closed (Close button or theme restart). Let the printer thread release the COM port,
+    # then leave at once. Background tool threads (fit check, slicing, file checks) may still be
+    # running inside this process; letting Python tear them down made the .exe die with
+    # "Failed to obtain/convert traceback!". Everything worth keeping is already saved.
+    app.worker.quit.set()
+    app.worker.join(3.0)
+    for fh in (sys.stdout, sys.stderr):
+        try:
+            fh.flush()
+        except Exception:                           # noqa: BLE001
+            pass
+    os._exit(0)

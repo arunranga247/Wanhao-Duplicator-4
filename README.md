@@ -14,11 +14,13 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 ![Printer](https://img.shields.io/badge/Printer-Wanhao%20Duplicator%204-34A853)
 ![Firmware](https://img.shields.io/badge/Firmware-Sailfish%207.7-FBBC04)
 ![Slicer](https://img.shields.io/badge/Slicer-PrusaSlicer%202.9.6-EA4335)
-![Version](https://img.shields.io/badge/version-1.0.0-1A73E8)
+![Version](https://img.shields.io/badge/version-2.0.0-1A73E8)
+![Qt](https://img.shields.io/badge/UI-Qt%206%20(PySide6)-41CD52?logo=qt&logoColor=white)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 **[⬇ Download the latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest)**
 
-<img src="docs/images/prepare.png" alt="Wanhao Duplicator 4 software - Duplicator 4 slicer with a sliced 3D model" width="900">
+<img src="docs/images/paths.png" alt="Wanhao Duplicator 4 software - 3D print-path preview with layer slider" width="900">
 
 </div>
 
@@ -50,13 +52,16 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 | Feature | What it does |
 |---|---|
 | 📦 **Print any 3D model** | STL, 3MF, OBJ and AMF are sliced by the PrusaSlicer engine with a tuned Duplicator 4 PLA profile: walls, solid top and bottom, infill, brim and optional supports |
+| 🧊 **3D model viewer** | See your model on the Duplicator 4 bed before slicing: drag to turn, right-drag to move, wheel to zoom. Runs on the graphics card (smooth even with 200 000 triangles), with an automatic fallback for PCs without OpenGL |
+| 〰️ **3D print-path preview** | After slicing, the real print moves in 3D (red = right nozzle, blue = left) with a **layer slider** to step through the print layer by layer |
+| ❔ **Help on every setting** | A small **?** next to Layer, Infill, Walls, Supports, Brim, Squish and the rest: hover for a little drawing and a plain explanation |
+| 🔍 **Fit check** | Before printing: does it fit, is it watertight, overhangs, thin walls, narrow gaps, and do assembled parts collide (3D report in the browser) |
 | 🧩 **Built-in demo prints** | Twisted flower vase (spiral "vase mode"), square blocks, two-colour R+L cubes, left-extruder air demo |
-| 👁️ **Toolpath preview** | Top view of the whole bed plus a 3D view, colour-coded per extruder |
 | ✅ **Safety check on every file** | Bed limits, nozzle height, extruder speed, heated-bed and tool-change rules, checked before anything is printed |
 | 🖨️ **Live printer control** | Temperatures with history chart, limit switches, move and home pad, filament load/unload, motor test |
 | 📡 **USB printing** | Progress, time left, current height, filament used and nozzle temperatures, with pause and cancel |
 | ⛔ **Emergency stop** | One click (or **Esc**) stops all motion and switches every heater off |
-| 🎨 **Modern interface** | Windows 11 style, Google Material colours, light or dark theme, resizable with automatic scrolling |
+| 🎨 **Modern interface** | Qt 6 window, Google Material colours, **light / dark theme switches instantly**, one clear font everywhere, resizable |
 | 💾 **Remembers your settings** | Tab, temperatures, per-object settings, window size and last file |
 | 📦 **Single .exe** | Double-click to run; a built-in self-test confirms the installation |
 
@@ -66,8 +71,13 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 
 | Printer | Prepare | Print |
 |---|---|---|
-| <img src="docs/images/printer.png" alt="Printer tab" width="300"> | <img src="docs/images/prepare.png" alt="Prepare tab" width="300"> | <img src="docs/images/print.png" alt="Print tab" width="300"> |
-| Temperatures, limit switches, move pad, extruders | Choose a model or demo, set it up, slice and preview | File library, checklist, live print progress |
+| <img src="docs/images/printer.png" alt="Printer tab" width="300"> | <img src="docs/images/prepare.png" alt="Prepare tab with 3D model viewer" width="300"> | <img src="docs/images/print.png" alt="Print tab" width="300"> |
+| Temperatures, limit switches, move pad, extruders | Choose a model or demo, see it in 3D, set it up and slice | File library, checklist, live print progress |
+
+| 3D print paths | Help on every setting | Dark theme |
+|---|---|---|
+| <img src="docs/images/paths.png" alt="3D print-path preview with layer slider" width="300"> | <img src="docs/images/help.png" alt="Help for the Infill setting" width="300"> | <img src="docs/images/prepare_dark.png" alt="Dark theme" width="300"> |
+| The sliced print in 3D, layer by layer | Small **?** signs explain each setting | Light, dark or follow Windows - switches instantly |
 
 ---
 
@@ -105,9 +115,9 @@ flowchart LR
 
 ### 1. Get the project
 
-**Easiest:** download **Duplicator4Studio-v1.0.0-windows.zip** from the
+**Easiest:** download **Duplicator4Studio.exe** (v2.0.0) from the
 [latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest) and extract it.
-It contains the app, the profile, test models and an `engine` folder ready for PrusaSlicer.
+Put it in a folder of its own and add the PrusaSlicer engine next to it (step 2).
 
 **Or** clone the source:
 
@@ -162,7 +172,7 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 | Way | How to start it |
 |---|---|
 | Executable | Double-click **`Duplicator4Studio.exe`** (or a desktop shortcut to it) |
-| From source | `D4_Control.bat` or `pythonw tools\d4_gui.py` |
+| From source | `D4_Control.bat` or `pythonw tools\d4_qt.py` |
 
 > The first time you start a new .exe, Windows may show *"Windows protected your PC"* because the
 > file is not code-signed. Click **More info → Run anyway**.
@@ -171,7 +181,7 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 
 ## 🎯 Your first print
 
-1. Prepare the bed: clean it, then apply **blue painter's tape or glue stick** (the bed is not heated, see [below](#-printer-specific-engineering)).
+1. Prepare the bed: clean it, then apply a thin layer of **glue stick** (or blue painter's tape).
 2. Load PLA into the left extruder: **Printer → ⬇ Load** (Left).
 3. **Prepare → 📦 Your 3D model → 📂 Browse…** → `models\test_nut.stl` → **⚙ Generate**.
 4. **📂 Open in Print tab → ▶ Print selected file** → tick the checklist.
@@ -187,7 +197,15 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 - **Move:** arrows move the head (◄ ► ▲ ▼), **⌂ Home XY** is in the centre, the **Bed (Z)** column moves the bed (▲ Up = toward the nozzles), and the step is 0.1 / 1 / 10 / 50 mm.
 - **Extruders:** Retract, Extrude, ⬇ Load and ⬆ Unload per extruder; **■ Stop filament** stops a load or unload.
 
-### Prepare tab: 3D model settings
+### Prepare tab
+- **1. Choose an object:** your own 3D model or a built-in demo. The small **i** button explains the object.
+- **2. Settings:** every setting has a small **?** - hover for a little drawing and a plain explanation, click for the same in a box.
+- **Preview:** up to three views, switched with the buttons above it:
+  **🧊 3D model** (before slicing), **〰 Print paths** (after slicing: the real moves in 3D, with a **layer slider**) and **🖼 Overview** (bed top view + facts).
+  Drag to turn, right-drag to move, mouse wheel to zoom, double-click to reset the view.
+- **🔍 Fit check / 🧩 Assembly…:** checks a model (or several parts that fit together) before you print and opens a 3D report.
+
+#### 3D model settings
 
 | Setting | Meaning | Default |
 |---|---|---|
@@ -199,14 +217,16 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 | Scale (%) | resize the model | 100 |
 | Nozzle °C / 1st layer °C | PLA temperatures | 210 / 220 |
 | Squish (mm) | first layer closer (negative) or further (positive) | −0.05 |
+| Colour Z (mm) | above this height the other extruder prints (two colours, 0 = off) | 0 |
+| Fast 0/1 | about 40 % quicker for simple parts | 0 |
 | Extruder | Left or Right | Left |
 
 ### Print tab
 The file library shows each file's print time, filament, Z-homing type and safety status. **▶ Print selected
 file** opens a checklist, then shows live progress. Keep the app open and the PC awake while printing.
 
-> **Tip:** press **Ctrl + Shift + A** for *About*. Settings are stored in `tools\d4_settings.json`;
-> delete that file to reset them.
+> **Tip:** press **Ctrl + Shift + A** for *About*. The theme (System / Light / Dark) is in the bottom-right corner
+> and switches instantly. Settings are stored in `tools\d4_settings.json`; delete that file to reset them.
 
 ---
 
@@ -216,7 +236,7 @@ This Duplicator 4 was analysed over USB. Its faults and firmware quirks are hand
 
 | Finding | Solution in Duplicator 4 Studio |
 |---|---|
-| Heated-bed thermistor faulty (reads 0–12 °C at room temperature) | The bed is never heated; such files are blocked; a brim plus slow, hot first layer for adhesion |
+| Heated-bed thermistor wire has failed before (then reads below room temperature) | Bed limited to 70 °C; bed heating (by hand or from a file) is refused while the sensor reads below 15 °C; the watchdog switches the bed off on over-temperature, sudden jumps or no rise |
 | Fast Z homing caused controller resets | Slow Z homing (5 mm/s, 40 s limit) with heaters off; heat-up only after homing succeeds |
 | Stored T1 (left nozzle) offset is wrong (~228 mm) | The firmware is never switched to T1; the 33 mm nozzle spacing is applied in software |
 | Extruder direction inverted (negative steps feed filament) | One global direction constant used by every tool |
@@ -229,11 +249,12 @@ This Duplicator 4 was analysed over USB. Its faults and firmware quirks are hand
 ## 🔒 Safety
 
 - **⛔ Emergency stop** (button or **Esc**): halts motion, clears the printer's buffer and switches all heaters off.
-- **Heater watchdog:** switches all heaters off if a sensor reads implausibly low or a heater does not warm up within 90 s.
-- **Bed heating blocked** until *Bed sensor repaired* is ticked. This switch resets at every start, on purpose.
+- **Heater watchdog:** switches all heaters off if a sensor reads implausibly low, a heater does not warm up in time, or the bed overheats or its reading jumps.
+- **Bed heating:** maximum 70 °C, *Allow bed heating* switch, and refused automatically while the bed sensor reads below 15 °C (broken wire) - when you set it by hand **and** when a file wants to heat the bed.
+- **No accidental changes:** number boxes ignore the mouse wheel until clicked, so scrolling the page never changes a temperature.
 - **Safety checker:** files that leave the bed, dig into it, over-speed an axis, heat the bed or use the faulty T1 offset are refused.
 - **Pre-print checklist** before every job.
-- **Crash log:** unexpected errors are written to `output\crash_log.txt` and shown on screen.
+- **Crash log:** unexpected errors are written to `output\crash_log.txt` and shown on screen. Closing the app releases the USB port first.
 
 ---
 
@@ -247,12 +268,19 @@ Wanhao-Duplicator-4/
 ├─ engine/
 │  ├─ duplicator4_pla.ini     Duplicator 4 PLA slicing profile
 │  └─ PrusaSlicer-2.9.6/      slicing engine (download, not in git)
-├─ models/                    test models (test_nut.stl, test_step_tower.stl)
-├─ output/                    print files (.x3g / .gcode), logs, previews
+├─ models/                    test models (test_nut.stl, test_step_tower.stl); your own models stay local
+├─ output/                    print files (.x3g / .gcode), logs, previews (not in git)
+├─ designs/                   your own object design scripts (not in git, not in the app)
 ├─ docs/images/               screenshots
 └─ tools/
-   ├─ d4_gui.py               application window and tabs
-   ├─ d4_worker.py            USB connection thread
+   ├─ d4_qt.py                application window and tabs (Qt), 3D viewers
+   ├─ d4_core.py              settings, help texts and every safety rule (tested)
+   ├─ d4_gui.py               old Tk window (kept for reference, not in the .exe)
+   ├─ d4_worker.py            USB connection thread, heater watchdog
+   ├─ model_preview.py        3D model loading and CPU picture renderer
+   ├─ fit_check.py            fit check + 3D report
+   ├─ level_bed.py            bed levelling helper
+   ├─ resume_print.py         continue a stopped print from a height
    ├─ d4_paths.py             folders, engine lookup, tool runner
    ├─ s3g_link.py             s3g/x3g protocol and printer constants
    ├─ slice_model.py          3D model → PrusaSlicer → x3g
@@ -265,7 +293,8 @@ Wanhao-Duplicator-4/
    ├─ stream_x3g.py           command-line USB printing
    ├─ check_nozzle.py         heater and extruder test
    ├─ make_test_stl.py        test model generator
-   └─ build_exe.py            builds Duplicator4Studio.exe
+   ├─ build_exe.py            builds Duplicator4Studio.exe
+   └─ tests/                  automatic tests (safety rules + the whole window, no printer needed)
 ```
 
 ---
@@ -273,12 +302,14 @@ Wanhao-Duplicator-4/
 ## 🔨 Building the executable
 
 ```powershell
-python tools\build_exe.py          # writes Duplicator4Studio.exe (about 20 MB)
-.\Duplicator4Studio.exe --selftest # must end with OVERALL: PASS
+python -m unittest discover -s tools\tests   # 110 tests, about 3 minutes, no printer needed
+python tools\build_exe.py                     # writes Duplicator4Studio.exe (about 63 MB)
+.\Duplicator4Studio.exe --selftest            # must end with OVERALL: PASS
 ```
 
-The build packs the app, all tools, the theme and the Duplicator 4 profile into one file, and sets the
+The build packs the app, all tools, Qt and the Duplicator 4 profile into one file, and sets the
 Windows file properties (product, version, copyright). The PrusaSlicer engine stays in `engine/`.
+The tests use a pretend printer and temporary folders, so they never move your printer or touch your files.
 
 ---
 
@@ -308,6 +339,8 @@ python make_vase.py --height 35 --twist 120 --lobes 8
 | No plastic at all | Load the filament (⬇ Load) and check the extruder lever is closed |
 | Printer disconnects during homing | Check the bed cables and the Z switch for pinched or loose wires |
 | Window blank or app will not start | See `output\crash_log.txt`, then restart the app |
+| 3D preview looks plain or slow | The PC has no usable OpenGL (e.g. remote desktop): the app switches to its built-in CPU viewer automatically. Updating the graphics driver brings back the fast 3D view. |
+| Two app windows open | Only one can use the printer's USB port: close the other one |
 
 ---
 
@@ -367,15 +400,35 @@ combining a proven slicing engine with software written specifically for this pr
 Duplicator 4 Studio uses these open-source projects:
 
 - [PrusaSlicer](https://github.com/prusa3d/PrusaSlicer): slicing engine (AGPL-3.0), used as a separate program
-- [Sun Valley ttk theme](https://github.com/rdbende/Sun-Valley-ttk-theme): Windows 11 style widgets
+- [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/): the app window and 3D viewers (LGPL-3.0)
+- [NumPy](https://numpy.org/) and [Manifold](https://github.com/elalish/manifold): 3D model maths and fit check
+- [three.js](https://threejs.org/): 3D fit-check report in the browser (MIT)
 - [pySerial](https://github.com/pyserial/pyserial): USB serial communication
 - [Pillow](https://github.com/python-pillow/Pillow): images and previews
 - [PyInstaller](https://github.com/pyinstaller/pyinstaller): single-file executable
 
-### Copyright
+### Licence
 
-Copyright © 2026 **ARUN**. All rights reserved.
-Third-party components remain under their own licences.
+Copyright © 2026 **ARUN**.
+
+Duplicator 4 Studio is free software: you can redistribute it and/or modify it under the terms of the
+**GNU General Public License v3.0** as published by the Free Software Foundation. See [`LICENSE`](LICENSE).
+
+This program is distributed in the hope that it will be useful, but **WITHOUT ANY WARRANTY**; without even
+the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 3D printers have hot parts and
+moving axes: never leave a printer unattended, and use this software at your own risk.
+
+Third-party components keep their own licences: see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+and the [`licenses/`](licenses) folder. The PrusaSlicer engine (AGPL-3.0) is a separate program that you
+download yourself; it is not part of this repository or of the .exe.
+
+### Trademarks
+
+*Wanhao* and *Duplicator* are trademarks of Wanhao; *MakerBot* and *Replicator* are trademarks of MakerBot
+Industries; *Sailfish* is the open-source firmware by its authors. They are named only to say which
+printers and firmware this software works with. Duplicator 4 Studio is an independent project and is **not
+affiliated with or endorsed by** any of them. It contains no code from Sailfish, GPX, ReplicatorG or
+MakerBot software.
 
 <div align="center">
 <sub>Made for the Wanhao Duplicator 4 · Sailfish firmware · Windows</sub>
