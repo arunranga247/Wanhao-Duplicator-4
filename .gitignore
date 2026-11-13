@@ -24,3 +24,6 @@ models/*
 # my own design scripts (each makes one object; the app never uses them) - run them as
 #   python designs/make_xxx.py      (they save into models/ and borrow helpers from tools/)
 designs/
+
+# copy of the licence texts the .exe makes for its About box (originals: LICENSE, licenses/)
+licences/
