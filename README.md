@@ -1,11 +1,11 @@
 <div align="center">
 
-# 🖨️ Duplicator 4 Studio: Wanhao Duplicator 4 Software
+# 🖨️ Duplicator 4 Studio
 
-**Wanhao Duplicator 4 software for Windows: a Duplicator 4 slicer, printer control and USB printing in one modern app.**
+### Wanhao Duplicator 4 software for Windows: slicer, printer control and USB printing in one modern app
 
 Open any 3D model (STL, 3MF, OBJ), slice it with the PrusaSlicer engine and print it over USB as
-**Sailfish x3g**, with every quirk of this dual-extruder printer handled automatically.
+**Sailfish x3g**, with every quirk of this dual-extruder printer handled automatically.<br>
 Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 **MakerBot Replicator 1 Dual** clones use the same Sailfish x3g system.
 
@@ -18,70 +18,143 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 ![Qt](https://img.shields.io/badge/UI-Qt%206%20(PySide6)-41CD52?logo=qt&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-**[⬇ Download the latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest)**
+**[⬇ Download](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest)** &nbsp;·&nbsp;
+**[🚀 Install](#-installation)** &nbsp;·&nbsp;
+**[🎯 First print](#-your-first-print)** &nbsp;·&nbsp;
+**[📖 User guide](#-user-guide)** &nbsp;·&nbsp;
+**[🐛 Report a bug](https://github.com/arunranga247/Wanhao-Duplicator-4/issues/new)**
 
-<img src="docs/images/paths.png" alt="Wanhao Duplicator 4 software - 3D print-path preview with layer slider" width="900">
+<img src="docs/images/print.png" alt="Duplicator 4 Studio printing - live 3D print view with the nozzle, layer 23 of 39" width="900">
+
+<sub>Printing with the live 3D view: what is on the bed in blue, the line just printed in orange, the nozzle where the printer really is.</sub>
 
 </div>
+
+> [!TIP]
+> **New in v2.1:** 🔴 **live 3D print view** · ↻ **resume a stopped print from its layer** ·
+> 🌡️ **bed and nozzle temperature for this print** (change them while printing) · 🎨 **two colours, two parts** ·
+> 🌳 tree supports · clearer setting names. [See the release notes](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/tag/v2.1.0).
 
 ---
 
 ## Contents
 
-- [Features](#-features)
-- [Screenshots](#-screenshots)
-- [How it works](#-how-it-works)
-- [Requirements](#-requirements)
-- [Installation](#-installation)
-- [Your first print](#-your-first-print)
-- [User guide](#-user-guide)
-- [Printer-specific engineering](#-printer-specific-engineering)
-- [Safety](#-safety)
-- [Project structure](#-project-structure)
-- [Building the executable](#-building-the-executable)
-- [Command-line tools](#-command-line-tools)
-- [Troubleshooting](#-troubleshooting)
-- [Roadmap](#-roadmap)
-- [Support me](#-support-me)
-- [About](#-about)
+| | | |
+|---|---|---|
+| ✨ [Features](#-features) | 🚀 [Installation](#-installation) | 🔒 [Safety](#-safety) |
+| 📸 [Screenshots](#-screenshots) | 🎯 [Your first print](#-your-first-print) | 🩺 [Troubleshooting](#-troubleshooting) |
+| 🔄 [How it works](#-how-it-works) | 📖 [User guide](#-user-guide) | 🧭 [Roadmap](#-roadmap) |
+| 📋 [Requirements](#-requirements) | 🔧 [Printer-specific engineering](#-printer-specific-engineering) | 💖 [Support me](#-support-me) |
+| 🔨 [Building the executable](#-building-the-executable) | 💻 [Command-line tools](#-command-line-tools) | 👤 [About](#-about) |
+| 📁 [Project structure](#-project-structure) | | |
 
 ---
 
 ## ✨ Features
 
-| Feature | What it does |
-|---|---|
-| 📦 **Print any 3D model** | STL, 3MF, OBJ and AMF are sliced by the PrusaSlicer engine with a tuned Duplicator 4 PLA profile: walls, solid top and bottom, infill, brim and optional supports |
-| 🧊 **3D model viewer** | See your model on the Duplicator 4 bed before slicing: drag to turn, right-drag to move, wheel to zoom. Runs on the graphics card (smooth even with 200 000 triangles), with an automatic fallback for PCs without OpenGL |
-| 〰️ **3D print-path preview** | After slicing, the real print moves in 3D (red = right nozzle, blue = left) with a **layer slider** to step through the print layer by layer |
-| 🔴 **Live 3D print view** | While printing, the preview follows the printer: what is on the bed in colour, the last line glowing orange, the rest of the layer as a light plan and a nozzle at its real position. Layers not printed yet are hidden (**👻 Show rest** shows them see-through) |
-| ↻ **Resume a stopped print** | The app saves the layer, height and nozzle position as it prints. After a stop (USB drop, cancel, crash or power cut), **Resume from layer…** makes a file that finishes the object on top of the part still on the bed |
-| 🌡️ **Temperatures for this print** | Choose the bed and nozzle temperature for one print, or change them while it prints with **Set now** |
-| 🎨 **Two colours, two parts** | Extruder **Both (2 parts, 2 colours)**: part 1 on the left nozzle, part 2 on the right, side by side with a small purge tower |
-| ❔ **Help on every setting** | A small **?** next to Layer, Infill, Walls, Supports, Brim, Squish and the rest: hover for a little drawing and a plain explanation |
-| 🔍 **Fit check** | Before printing: does it fit, is it watertight, overhangs, thin walls, narrow gaps, and do assembled parts collide (3D report in the browser) |
-| 🧩 **Built-in demo prints** | Twisted flower vase (spiral "vase mode"), square blocks, two-colour R+L cubes, left-extruder air demo |
-| ✅ **Safety check on every file** | Bed limits, nozzle height, extruder speed, heated-bed and tool-change rules, checked before anything is printed |
-| 🖨️ **Live printer control** | Temperatures with history chart, limit switches, move and home pad, filament load/unload, motor test |
-| 📡 **USB printing** | Progress, layer (e.g. 136 / 232), time left, current height, filament used and nozzle temperatures, with pause and cancel |
-| ⛔ **Emergency stop** | One click (or **Esc**) stops all motion and switches every heater off |
-| 🎨 **Modern interface** | Qt 6 window, Google Material colours, **light / dark theme switches instantly**, one clear font everywhere, resizable |
-| 💾 **Remembers your settings** | Tab, temperatures, per-object settings, window size and last file |
-| 📦 **Single .exe** | Double-click to run; a built-in self-test confirms the installation |
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 📦 Print any 3D model
+STL, 3MF, OBJ and AMF, sliced by the PrusaSlicer engine with a tuned Duplicator 4 PLA profile:
+walls, solid top and bottom, infill, brim, and **tree supports** when needed.
+
+</td>
+<td width="50%" valign="top">
+
+### 🔴 Live 3D print view
+While printing, the preview follows the printer: what is on the bed in colour, the last line
+glowing orange, the rest of the layer as a light plan and the **nozzle where it really is**.
+**👻 Show rest** adds the unprinted part, see-through.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### ↻ Resume a stopped print
+The app saves the layer, height and nozzle position as it prints. After a USB drop, cancel, crash or
+power cut, **Resume from layer…** finishes the object **on top of the part still on the bed**.
+
+</td>
+<td valign="top">
+
+### 🌡️ Temperatures for this print
+Choose the bed and nozzle temperature for one print, or change them **while it prints** with
+**Set now**. Standby nozzles and the switch-off at the end are never touched.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🧊 3D model viewer & 〰️ print paths
+See your model on the Duplicator 4 bed before slicing, then the real print moves in 3D
+(red = right nozzle, blue = left) with a **layer slider**. Runs on the graphics card, with a fallback
+for PCs without OpenGL.
+
+</td>
+<td valign="top">
+
+### 🎨 Two colours, two parts
+**Both (2 parts, 2 colours):** part 1 on the left nozzle, part 2 on the right, side by side with a
+small purge tower. Or change colour at a height with **Colour change Z**.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### ✅ Safety first
+A safety check on every file (bed limits, nozzle height, extruder speed, heated bed, tool changes),
+a heater watchdog, a pre-print checklist and a one-click **⛔ Emergency stop** (or **Esc**).
+
+</td>
+<td valign="top">
+
+### 🖨️ Live printer control
+Temperatures with a 5-minute chart, limit switches and position, move and home pad, filament
+load / unload, motor test, and a **bed timer** for a broken bed sensor.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🔍 Fit check
+Before printing: does it fit, is it watertight, overhangs, thin walls, narrow gaps, and do assembled
+parts collide - as a 3D report in the browser.
+
+</td>
+<td valign="top">
+
+### 🎨 Modern, friendly window
+Qt 6, **light / dark theme switches instantly**, a small **?** on every setting with a drawing and a plain
+explanation, remembers your settings, and ships as a **single .exe** with a built-in self-test.
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## 📸 Screenshots
 
-| Printer | Prepare | Print |
-|---|---|---|
-| <img src="docs/images/printer.png" alt="Printer tab" width="300"> | <img src="docs/images/prepare.png" alt="Prepare tab with 3D model viewer" width="300"> | <img src="docs/images/print.png" alt="Print tab" width="300"> |
-| Temperatures, limit switches, move pad, extruders | Choose a model or demo, see it in 3D, set it up and slice | File library, checklist, live print progress |
+| 🖨️ Printer | 📦 Prepare | 📡 Print |
+|:---:|:---:|:---:|
+| <img src="docs/images/printer.png" alt="Printer tab: temperatures with chart, limit switches, move pad, extruders" width="290"> | <img src="docs/images/prepare.png" alt="Prepare tab with the 3D model viewer" width="290"> | <img src="docs/images/print.png" alt="Print tab while printing, live 3D view" width="290"> |
+| Temperatures with chart, limit switches, move pad, extruders | Your model in 3D, clear settings, Generate | File library, print job, live 3D view |
 
-| 3D print paths | Help on every setting | Dark theme |
-|---|---|---|
-| <img src="docs/images/paths.png" alt="3D print-path preview with layer slider" width="300"> | <img src="docs/images/help.png" alt="Help for the Infill setting" width="300"> | <img src="docs/images/prepare_dark.png" alt="Dark theme" width="300"> |
-| The sliced print in 3D, layer by layer | Small **?** signs explain each setting | Light, dark or follow Windows - switches instantly |
+| 〰️ Print paths | ↻ Resume a stopped print | 🌙 Dark theme |
+|:---:|:---:|:---:|
+| <img src="docs/images/paths.png" alt="3D print-path preview with layer slider" width="290"> | <img src="docs/images/resume.png" alt="Print job card after a stop: stopped at layer 23 of 39, Resume from layer button" width="290"> | <img src="docs/images/print_dark.png" alt="Dark theme, printing" width="290"> |
+| The sliced print in 3D, layer by layer | Where it stopped, and a resume file in one click | Light, dark or follow Windows, instantly |
+
+| 🔴 Live 3D print view (close-up) | ❔ Help on every setting |
+|:---:|:---:|
+| <img src="docs/images/live.png" alt="Live 3D print view close-up: printed part, glowing last line, nozzle" width="520"> | <img src="docs/images/help.png" alt="Help for the Infill setting" width="300"> |
+| Blue = printed · orange = the line just printed · gold = the nozzle | Hover the small **?** for a drawing and a plain explanation |
 
 ---
 
@@ -250,6 +323,9 @@ file** opens a checklist, then shows live progress. Keep the app open and the PC
 
 ## 🔧 Printer-specific engineering
 
+<details>
+<summary><b>How this printer's faults and firmware quirks are handled (click to open)</b></summary>
+
 This Duplicator 4 was analysed over USB. Its faults and firmware quirks are handled in software:
 
 | Finding | Solution in Duplicator 4 Studio |
@@ -261,6 +337,8 @@ This Duplicator 4 was analysed over USB. Its faults and firmware quirks are hand
 | No part-cooling fan | The slicer slows down small layers so they can cool |
 | Very short slicer moves could over-speed the extruder | Extruder speed limited to 25 mm/s on every move |
 | Empty nozzle for the first seconds of a print | 5 s settle, retract recovery, purge blob and double prime line |
+
+</details>
 
 ---
 
@@ -278,6 +356,9 @@ This Duplicator 4 was analysed over USB. Its faults and firmware quirks are hand
 ---
 
 ## 📁 Project structure
+
+<details>
+<summary><b>Folders and files (click to open)</b></summary>
 
 ```
 Wanhao-Duplicator-4/
@@ -319,9 +400,14 @@ Wanhao-Duplicator-4/
    └─ tests/                  automatic tests (safety rules + the whole window, no printer needed)
 ```
 
+</details>
+
 ---
 
 ## 🔨 Building the executable
+
+<details>
+<summary><b>Tests and building the .exe (click to open)</b></summary>
 
 ```powershell
 python -m unittest discover -s tools\tests   # 150+ tests, about 3 minutes, no printer needed
@@ -333,9 +419,14 @@ The build packs the app, all tools, Qt and the Duplicator 4 profile into one fil
 Windows file properties (product, version, copyright). The PrusaSlicer engine stays in `engine/`.
 The tests use a pretend printer and temporary folders, so they never move your printer or touch your files.
 
+</details>
+
 ---
 
 ## 💻 Command-line tools
+
+<details>
+<summary><b>Slice, check, preview, resume and print from the command line (click to open)</b></summary>
 
 ```powershell
 cd tools
@@ -348,6 +439,8 @@ python stream_x3g.py ..\output\NUT.x3g --port COM30     # close the app first
 python check_nozzle.py --tool right
 python make_vase.py --height 35 --twist 120 --lobes 8
 ```
+
+</details>
 
 ---
 
