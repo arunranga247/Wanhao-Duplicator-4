@@ -464,12 +464,13 @@ FRAG = """
 uniform vec3 color;
 uniform float lit;
 uniform float vcol;
+uniform float alpha;
 varying vec3 vN;
 varying vec3 vP;
 varying vec3 vC;
 void main() {
     vec3 base = vcol > 0.5 ? vC : color;                // own colour per part, or one colour
-    if (lit < 0.5) { gl_FragColor = vec4(base, 1.0); return; }
+    if (lit < 0.5) { gl_FragColor = vec4(base, alpha); return; }
     vec3 n = normalize(vN);
     vec3 v = normalize(-vP);
     if (dot(n, v) < 0.0) n = -n;                       // two-sided: open meshes look right too
@@ -478,11 +479,29 @@ void main() {
     float f = max(dot(n, v), 0.0);
     vec3 h = normalize(L + v);
     float s = pow(max(dot(n, h), 0.0), 48.0) * 0.22;
-    gl_FragColor = vec4(base * (0.28 + 0.47 * d + 0.30 * f) + vec3(s), 1.0);
+    gl_FragColor = vec4(base * (0.28 + 0.47 * d + 0.30 * f) + vec3(s), alpha);
 }
 """
 GL_FLOAT, GL_TRIANGLES, GL_LINES = 0x1406, 4, 1
 GL_DEPTH_TEST, GL_COLOR_BIT, GL_DEPTH_BIT, GL_POLY_OFFSET = 0x0B71, 0x4000, 0x0100, 0x8037
+GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA = 0x0BE2, 0x0302, 0x0303
+GL_LESS, GL_LEQUAL, GL_ALWAYS = 0x0201, 0x0203, 0x0207
+TRAIL_RGB = (1.0, 0.45, 0.10)           # last moves of the live print: glowing orange
+PLAN_RGB = (0.55, 0.85, 1.0)            # rest of the CURRENT layer: where the nozzle goes next
+LIVE_TRAIL_SEGS = 12                    # glow on the last moves only (infill lines are long)
+
+
+def live_ranges(counts, done_vert, show_rest, trail_segs=LIVE_TRAIL_SEGS):
+    """Vertex ranges (start, count) of the live print view.
+    printed - everything printed so far (real colours); trail - its last moves (glow);
+    plan - the rest of the layer being printed; rest - all layers above (only with show_rest)."""
+    total = int(counts[-1])
+    done = max(0, min(int(done_vert), total))
+    k = min(int(np.searchsorted(counts, done, side="right")), len(counts) - 1)   # layer of the NEXT move
+    layer_end = int(counts[k])
+    t0 = max(0, done - 2 * trail_segs)
+    return {"printed": (0, done), "trail": (t0, done - t0), "plan": (done, max(0, layer_end - done)),
+            "rest": (layer_end, total - layer_end) if show_rest else (layer_end, 0), "layer": k}
 MODEL_RGB = (0.92, 0.55, 0.18)
 VIEW0 = {"yaw": -35.0, "pitch": 28.0, "zoom": 1.0, "px": 0.0, "py": 0.0}
 PATH_RGB = {0: (0.92, 0.30, 0.28), 1: (0.24, 0.56, 0.92)}       # right nozzle red, left nozzle blue
@@ -495,6 +514,7 @@ class Toolpath:
     def __init__(self, path):
         segs, info = rp.decode(path)
         ext = np.array([s[:7] for s in segs if s[7]], dtype=np.float64)
+        cmd = np.array([ci for s, ci in zip(segs, info["seg_cmd"]) if s[7]], dtype=np.int64)
         if not len(ext):
             raise ValueError("this file prints nothing (no extrusion moves)")
         p0, p1, tool = ext[:, 0:3], ext[:, 3:6], ext[:, 6].astype(int)
@@ -503,6 +523,7 @@ class Toolpath:
         z = np.round(np.maximum(p0[:, 2], p1[:, 2]) / 0.05) * 0.05
         order = np.argsort(z, kind="stable")                    # layer by layer, in print order
         p0, p1, tool, z = p0[order], p1[order], tool[order], z[order]
+        self.cmd, self.end, self.seg_tool = cmd[order], p1, tool      # live view: printed so far
         self.layers = np.unique(z)
         self.counts = np.searchsorted(z, self.layers, side="right") * 2      # vertices up to each layer
         zmin, zmax = float(self.layers[0]), float(self.layers[-1])
@@ -523,8 +544,56 @@ class Toolpath:
         self.zc = float(self.center[2])
         self.radius = max(float(np.linalg.norm(hi - lo)) / 2, 5.0)
         used = sorted(set(tool.tolist()))
+        self.used_tools = used
         self.info = "%d layers  ·  %.1f mm high  ·  %s" % (
             len(self.layers), zmax, " + ".join(("right nozzle (red)", "left nozzle (blue)")[t] for t in used if t in (0, 1)))
+
+
+    LIVE_WINDOW = 160          # printer buffer: the newest moves sent may not be printed yet
+
+    def live_done(self, sent_i, head=None):
+        """-> (segments printed, 0-based layer, nozzle position) while a print runs.
+        sent_i: commands sent to the printer. head: printer head position (x, y, z) - the LEFT nozzle
+        prints 33 mm left of it. The printed part ends at the move nearest the nozzle among the
+        last ones sent (the printer runs a few moves behind what was sent)."""
+        n = int(np.count_nonzero(self.cmd < sent_i))
+        tool = int(self.seg_tool[max(0, n - 1)]) if len(self.seg_tool) else 0
+        nozzle = None
+        if head is not None:
+            nozzle = np.array([head[0] - (33.0 if tool == 1 else 0.0), head[1], head[2]], dtype=np.float64)
+            lo = max(0, n - self.LIVE_WINDOW)
+            if n > lo:
+                d = np.linalg.norm(self.end[lo:n] - nozzle, axis=1)
+                j = int(np.argmin(d))
+                if d[j] < 3.0:
+                    n = lo + j + 1
+        k = int(np.searchsorted(self.counts, 2 * n, side="left")) if n else 0
+        return n, min(k, len(self.layers) - 1), nozzle
+
+
+def nozzle_marker(p):
+    """Triangles (pos + normal) of a small nozzle: cone tip AT the print point, heater block above."""
+    x, y, z = (float(v) for v in p)
+    tris = []
+    m = 20
+    for i in range(m):
+        a0, a1 = 2 * np.pi * i / m, 2 * np.pi * (i + 1) / m
+        c0, s0, c1, s1 = np.cos(a0), np.sin(a0), np.cos(a1), np.sin(a1)
+        r, h = 2.2, 4.0                                             # cone: tip down on the part
+        n0 = np.array([c0, s0, r / h])
+        n1 = np.array([c1, s1, r / h])
+        tris += [((x, y, z), (n0 + n1) / 2), ((x + r * c0, y + r * s0, z + h), n0), ((x + r * c1, y + r * s1, z + h), n1)]
+        R, z0, z1 = 4.5, z + h, z + h + 7.0                         # heater block (round)
+        tris += [((x + R * c0, y + R * s0, z0), (c0, s0, 0)), ((x + R * c1, y + R * s1, z0), (c1, s1, 0)),
+                 ((x + R * c1, y + R * s1, z1), (c1, s1, 0)),
+                 ((x + R * c0, y + R * s0, z0), (c0, s0, 0)), ((x + R * c1, y + R * s1, z1), (c1, s1, 0)),
+                 ((x + R * c0, y + R * s0, z1), (c0, s0, 0))]
+        tris += [((x, y, z1), (0, 0, 1)), ((x + R * c0, y + R * s0, z1), (0, 0, 1)), ((x + R * c1, y + R * s1, z1), (0, 0, 1)),
+                 ((x, y, z0), (0, 0, -1)), ((x + R * c1, y + R * s1, z0), (0, 0, -1)), ((x + R * c0, y + R * s0, z0), (0, 0, -1))]
+    return np.array([list(pt) + list(nm) for pt, nm in tris], dtype=np.float32)
+
+
+NOZZLE_RGB = (1.0, 0.76, 0.12)          # live nozzle: warm yellow, seen on red, blue and the bed
 
 
 class ViewMixin:
@@ -590,6 +659,9 @@ class GLViewer(ViewMixin, QOpenGLWidget):
         self.mode = "mesh"             # "mesh" = 3D model, "paths" = print moves of an .x3g
         self.paths = None
         self.path_vert = 0             # how many path vertices to draw (layer slider)
+        self.live = None               # (printed vertices, nozzle xyz or None) while a print runs
+        self.show_rest = False         # live: also show the layers still to print, see-through
+        self.n_marker = 0
         self.setMinimumSize(200, 150)
         fmt = QSurfaceFormat()
         fmt.setDepthBufferSize(24)
@@ -614,6 +686,8 @@ class GLViewer(ViewMixin, QOpenGLWidget):
             self.bed_buf.create()
             self.path_buf = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
             self.path_buf.create()
+            self.marker_buf = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
+            self.marker_buf.create()
             self._upload_bed()
             self.ok = True
             if self._pending is not None:
@@ -681,6 +755,20 @@ class GLViewer(ViewMixin, QOpenGLWidget):
         self.path_vert = int(tp.counts[-1])
         self._show("paths", tp)
 
+    def set_live(self, done_vert, nozzle):
+        """Live print: done_vert path vertices printed (colour), the rest faint; nozzle marker.
+        None = normal view again."""
+        self.live = None if done_vert is None else (int(done_vert), nozzle)
+        if self.ok and self.live is not None and nozzle is not None:
+            self.makeCurrent()
+            arr = nozzle_marker(nozzle)
+            self._upload(self.marker_buf, arr)
+            self.n_marker = len(arr)
+            self.doneCurrent()
+        elif self.live is None or nozzle is None:
+            self.n_marker = 0
+        self.update()
+
     def set_layer(self, k):
         """Show the print up to layer k (0-based)."""
         if self.paths is not None:
@@ -729,6 +817,8 @@ class GLViewer(ViewMixin, QOpenGLWidget):
         loc_col, loc_lit = pr.uniformLocation("color"), pr.uniformLocation("lit")
         loc_vcol = pr.uniformLocation("vcol")
         pr.setUniformValue1f(loc_vcol, 0.0)
+        loc_alpha = pr.uniformLocation("alpha")
+        pr.setUniformValue1f(loc_alpha, 1.0)
         dark = bg.lightnessF() < 0.5
         # bed plate + grid (plate pushed back a little so the grid lines win)
         self._attrs(self.bed_buf)
@@ -750,6 +840,52 @@ class GLViewer(ViewMixin, QOpenGLWidget):
             pr.setUniformValue(loc_col, QVector3D(*MODEL_RGB))
             f.glDrawArrays(GL_TRIANGLES, 0, self.n_vert)
             pr.setUniformValue1f(loc_vcol, 0.0)
+        elif self.mode == "paths" and self.path_vert and self.live is not None:
+            r = live_ranges(self.paths.counts, self.live[0], self.show_rest)
+            self._attrs(self.path_buf, colours=True)
+            pr.setUniformValue1f(loc_lit, 0.0)
+            pr.setUniformValue1f(loc_vcol, 1.0)
+            f.glLineWidth(1.8)
+            if r["printed"][1]:
+                f.glDrawArrays(GL_LINES, *r["printed"])           # what is on the bed: real colours
+            pr.setUniformValue1f(loc_vcol, 0.0)
+            f.glDepthFunc(GL_LEQUAL)                              # glow drawn over the same lines
+            if r["trail"][1]:
+                pr.setUniformValue(loc_col, QVector3D(*TRAIL_RGB))
+                f.glLineWidth(3.2)
+                f.glDrawArrays(GL_LINES, *r["trail"])
+            f.glEnable(GL_BLEND)
+            f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            f.glDepthMask(False)                                  # see-through: never hides the nozzle
+            if r["plan"][1]:
+                pr.setUniformValue(loc_col, QVector3D(*PLAN_RGB))
+                pr.setUniformValue1f(loc_alpha, 0.55)
+                f.glLineWidth(1.2)
+                f.glDrawArrays(GL_LINES, *r["plan"])
+            if r["rest"][1]:                                      # glass copy in the part's own colour
+                self._attrs(self.path_buf, colours=True)
+                pr.setUniformValue1f(loc_vcol, 1.0)
+                pr.setUniformValue1f(loc_alpha, 0.07)
+                f.glLineWidth(1.0)
+                f.glDrawArrays(GL_LINES, *r["rest"])
+                pr.setUniformValue1f(loc_vcol, 0.0)
+            f.glDepthMask(True)
+            f.glDisable(GL_BLEND)
+            f.glDepthFunc(GL_LESS)
+            pr.setUniformValue1f(loc_alpha, 1.0)
+            f.glLineWidth(1.0)
+            self.prog.disableAttributeArray(2)
+            if self.n_marker:                                     # the nozzle, on top of everything
+                self._attrs(self.marker_buf)
+                pr.setUniformValue1f(loc_lit, 1.0)
+                pr.setUniformValue(loc_col, QVector3D(*NOZZLE_RGB))
+                f.glDrawArrays(GL_TRIANGLES, 0, self.n_marker)
+                f.glClear(GL_DEPTH_BIT)                           # ... and a see-through copy where
+                f.glEnable(GL_BLEND)                              # the part is in front of it
+                pr.setUniformValue1f(loc_alpha, 0.35)
+                f.glDrawArrays(GL_TRIANGLES, 0, self.n_marker)
+                f.glDisable(GL_BLEND)
+                pr.setUniformValue1f(loc_alpha, 1.0)
         elif self.mode == "paths" and self.path_vert:
             self._attrs(self.path_buf, colours=True)
             pr.setUniformValue1f(loc_lit, 0.0)
@@ -843,6 +979,14 @@ class ModelArea(QWidget):
             bl.addWidget(b)
             self.btns[key] = b
         bl.addStretch(1)
+        self.rest_btn = QPushButton("👻  Show rest")
+        self.rest_btn.setCheckable(True)
+        self.rest_btn.setProperty("kind", "seg")
+        self.rest_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.rest_btn.setToolTip("Live print: also show the layers still to print, see-through")
+        self.rest_btn.toggled.connect(self._rest_toggled)
+        self.rest_btn.hide()
+        bl.addWidget(self.rest_btn)
         outer.addWidget(self.bar)
         mid = QHBoxLayout()
         mid.setSpacing(6)
@@ -878,6 +1022,7 @@ class ModelArea(QWidget):
             self.stack.addWidget(self.gl)
         self.scene = self.paths = self.picture = None
         self.current = None
+        self.live = None                                     # (done segments, layer, nozzle, text)
         self._update_bar()
 
     # ---- what can be shown -------------------------------------------------------------------
@@ -890,6 +1035,8 @@ class ModelArea(QWidget):
         """Generate finished: show the print paths in 3D (or the picture if 3D is not possible)."""
         if not keep_model:
             self.scene = None
+        self.live = None                                     # another file: not the running print
+        self.layer_slider.setEnabled(True)
         self.paths, self.picture = paths, picture
         self.show_view("paths" if self.paths_possible() else "picture")
 
@@ -920,6 +1067,8 @@ class ModelArea(QWidget):
             self.layer_slider.setValue(n - 1)
             self.layer_slider.blockSignals(False)
             self._layer_changed(n - 1)
+            if self.live is not None:
+                self.set_live(*self.live)
             QTimer.singleShot(3000, self._check_gl)
         elif key == "picture":
             self.image.set_image(self.picture)
@@ -931,8 +1080,47 @@ class ModelArea(QWidget):
         for k, b in self.btns.items():
             b.setVisible(av[k])
             b.setChecked(k == self.current)
-        self.bar.setVisible(sum(av.values()) >= 2)
+        live = getattr(self, "live", None) is not None and self.current == "paths"
+        self.rest_btn.setVisible(live)
+        self.bar.setVisible(sum(av.values()) >= 2 or live)
         self.layer_box.setVisible(self.current == "paths")
+
+    def _rest_toggled(self, on):
+        if self.gl is not None:
+            self.gl.show_rest = bool(on)
+            self.gl.update()
+
+    def set_live(self, done, layer, nozzle, text=None):
+        """The print of THIS file is running: what is printed (colour, glowing last moves), the
+        rest of this layer as a light plan, the nozzle. Layers above: hidden or see-through."""
+        first = self.live is None
+        self.live = (done, layer, nozzle, text)
+        self.layer_slider.setEnabled(False)                  # the printer decides the layer now
+        if first:
+            self._update_bar()
+        if self.paths is None or self.current != "paths":
+            return
+        self.layer_slider.blockSignals(True)
+        self.layer_slider.setValue(layer)
+        self.layer_slider.blockSignals(False)
+        self.layer_top.setText("● LIVE\n" + (text or "Layer\n%d / %d" % (layer + 1, len(self.paths.layers))))
+        self.layer_z.setText("%.2f\nmm" % self.paths.layers[layer])
+        if self.gl is not None:
+            self.gl.set_live(2 * done, nozzle)
+
+    def clear_live(self):
+        """Print finished: back to the normal view of the whole file."""
+        if self.live is None:
+            return
+        self.live = None
+        self.layer_slider.setEnabled(True)
+        self._update_bar()
+        if self.gl is not None:
+            self.gl.set_live(None, None)
+        if self.paths is not None and self.current == "paths":
+            n = len(self.paths.layers)
+            self.layer_slider.setValue(n - 1)
+            self._layer_changed(n - 1)
 
     def _layer_changed(self, k):
         if self.paths is None:
@@ -1207,6 +1395,7 @@ class MainWindow(QMainWindow):
         self.es_last, self.es_changes = None, collections.deque()
         self.connected = self.printing = self.user_disconnected = False
         self.print_stats, self.heat_phase, self.job_file = None, None, ""
+        self.print_path, self._sent_i, self._live_t, self._live_layer = None, 0, 0.0, None
         self._connecting_until = 0.0
         self._last_temps, self._last_pos = {}, [0.0] * 5
         self._controls, self._ports = [], []
@@ -2301,6 +2490,9 @@ class MainWindow(QMainWindow):
             return
         self.print_stats, self.printing, self.heat_phase = st, True, None
         self.job_file = os.path.basename(path)
+        self.print_path, self._sent_i, self._live_layer = path, 0, None
+        if self.file_area.paths_possible():
+            self.file_area.show_view("paths")             # live: watch the nozzle print it
         self._set_prog(0.0, done=False)
         self.job_name.setText("⏳ Homing, then heating - " + self.job_file)
         self.resume_box.hide()
@@ -2521,7 +2713,23 @@ class MainWindow(QMainWindow):
         self.refresh_ports()                                      # list what is plugged in now
         self.log(reason, "alarm" if was else None)
 
+    def update_live(self, force=False):
+        """Live print view: printed part, layer and nozzle of the running print (when its paths
+        are the ones on show)."""
+        if not self.print_path or (not force and time.time() - self._live_t < 0.25):
+            return
+        tp = self._paths_cache.get(self.print_path, (0, None))[1]
+        if tp is None or self.file_area.paths is not tp:
+            return
+        self._live_t = time.time()
+        done, layer, nozzle = tp.live_done(self._sent_i, self._last_pos[:3] if self.connected else None)
+        info = self._live_layer
+        text = "Layer\n%d / %d" % (info["layer"], info["layers"]) if info and info.get("layer") else None
+        self.file_area.set_live(done, layer, nozzle, text)
+
     def on_progress(self, i, n, elapsed):
+        self._sent_i = i
+        self.update_live()
         frac, left = core.progress(self.print_stats, i, n)
         self._set_prog(frac)
         self.job_vals["pct"].setText("%d %%" % (100 * frac))
@@ -2532,6 +2740,7 @@ class MainWindow(QMainWindow):
         """The worker found a new layer: show it (it is also saved in last_print.json)."""
         if not self.printing or info.get("layer") is None:
             return
+        self._live_layer = info
         self.job_vals["layer"].setText("%d / %d" % (info["layer"], info["layers"]))
         if self.heat_phase is None:
             z = info.get("z_slicer")
@@ -2630,6 +2839,11 @@ class MainWindow(QMainWindow):
     def on_print_done(self, ok, msg):
         self.printing = False
         self.heat_phase = None
+        if ok:
+            self.file_area.clear_live()                   # finished: the whole print in colour
+        else:
+            self.update_live(force=True)                  # stopped: the view stays where it stopped
+        self.print_path = None
         self.job_name.setText(("✅ " if ok else "⚠ ") + msg)
         if ok:
             self._set_prog(1.0, done=True)
@@ -2681,6 +2895,7 @@ class MainWindow(QMainWindow):
         self.status_temps.setText("R %s°C   L %s°C   bed %s°C   Z %.2f" % (t.get("r"), t.get("l"), t.get("bed"), p[2]))
         if self.printing:
             self._show_heat()
+            self.update_live(force=True)
             self.job_vals["z"].setText("%.2f mm" % p[2])
             self.job_vals["fil"].setText("R %.0f / L %.0f mm" % (max(0, p[3]), max(0, p[4])))
             self.job_vals["noz"].setText("R %s° / L %s°" % (t.get("r"), t.get("l")))

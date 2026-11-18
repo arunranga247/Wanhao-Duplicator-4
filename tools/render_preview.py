@@ -35,7 +35,8 @@ def decode(path):
     pos, tool, segs = None, 0, []
     last_et = None
     info = {"name": os.path.basename(path), "temps": {}, "zhome": False, "fil": [0.0, 0.0], "n": len(cmds)}
-    for c in cmds:
+    seg_cmd = info["seg_cmd"] = []             # command index of every segment (live print view)
+    for ci, c in enumerate(cmds):
         k = c[0]
         if k == 140:
             pos = list(struct.unpack("<5i", c[1:21]))
@@ -77,10 +78,12 @@ def decode(path):
                     last_et = et
                     dx = 33.0 if et == 1 else 0.0
                     segs.append((mm0[0] - dx, mm0[1], mm0[2], mm1[0] - dx, mm1[1], mm1[2], et, True))
+                    seg_cmd.append(ci)
                 else:
                     # travel: draw it where the active nozzle goes, not the head
                     dx = 33.0 if last_et == 1 else 0.0
                     segs.append((mm0[0] - dx, mm0[1], mm0[2], mm1[0] - dx, mm1[1], mm1[2], 2, False))
+                    seg_cmd.append(ci)
             pos = new
     return segs, info
 

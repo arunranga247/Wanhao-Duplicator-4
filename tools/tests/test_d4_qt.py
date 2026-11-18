@@ -16,6 +16,8 @@ import threading
 import time
 import unittest
 
+import numpy as np
+
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -520,6 +522,89 @@ class Printing(Base):
         self.w.make_resume()
         self.assertFalse(os.path.exists(os.path.join(OUT_T, "T_PRINT_RESUME_L6.x3g")))
         os.remove(self.w.last_print_path)
+
+    def test_live_toolpath_follows_the_printer(self):
+        tp = d4_qt.Toolpath(self.path)
+        self.assertEqual(tp.live_done(0)[0], 0)                          # nothing sent: nothing printed
+        n_all = len(tp.cmd)
+        self.assertEqual(tp.live_done(10 ** 9)[0], n_all)                # all sent: all printed
+        mid = int(tp.cmd[n_all // 2])
+        n, k, noz = tp.live_done(mid + 1)
+        self.assertTrue(0 < n < n_all)
+        self.assertEqual(k, int(np.searchsorted(tp.counts, 2 * n, side="left")))
+        back = tp.end[n - 10]                                            # printer 9 moves behind
+        dx = 33.0 if int(tp.seg_tool[n - 1]) == 1 else 0.0
+        n2, _, noz = tp.live_done(mid + 1, (back[0] + dx, back[1], back[2]))
+        self.assertEqual(n2, n - 9)
+        self.assertAlmostEqual(float(noz[0]), float(back[0]), places=3)  # nozzle, not head, position
+        self.assertEqual(len(d4_qt.nozzle_marker(noz)) % 3, 0)
+
+    def settle_preview(self):
+        """Let the background preview of the selected file finish, so it cannot replace ours."""
+        wait_for(lambda: self.path in self.w._paths_cache, 60)
+        wait_for(lambda: False, 0.3)
+        self.w._live_t = 0.0
+
+    def test_live_view_during_print(self):
+        self.settle_preview()
+        tp = d4_qt.Toolpath(self.path)
+        self.w._paths_cache[self.path] = (os.path.getmtime(self.path), tp)
+        self.w.file_area.set_result(tp, None, keep_model=False)
+        self.w.start_print()
+        mid = int(tp.cmd[len(tp.cmd) // 2])
+        self.w.on_progress(mid + 1, len(tp.cmd), 60.0)
+        self.assertIsNotNone(self.w.file_area.live)
+        self.assertGreater(self.w.file_area.live[0], 0)
+        self.w.on_layer({"layer": 7, "layers": 20, "z_slicer": 1.0})
+        self.w.on_status(status(pos=(0, 0, 1, 0, 0)))
+        self.assertIn("7 / 20", self.w.file_area.live[3])
+        self.w.on_print_done(False, "Print cancelled")                  # stopped: frozen where it stopped
+        self.assertIsNotNone(self.w.file_area.live)
+        self.w.file_area.clear_live()
+        self.w.printing = True
+        self.w.print_path = self.path
+        self.w.update_live(force=True)
+        self.w.on_print_done(True, "Print finished")                    # finished: normal view again
+        self.assertIsNone(self.w.file_area.live)
+        self.assertTrue(self.w.file_area.layer_slider.isEnabled())
+
+    def test_live_ranges_hide_what_is_not_printed(self):
+        counts = np.array([100, 200, 300, 400])                         # 4 layers, 100 vertices each
+        r = d4_qt.live_ranges(counts, 150, show_rest=False, trail_segs=10)
+        self.assertEqual(r["printed"], (0, 150))
+        self.assertEqual(r["trail"], (130, 20))                         # last 10 moves glow
+        self.assertEqual(r["plan"], (150, 50))                          # rest of layer 2 only
+        self.assertEqual(r["rest"][1], 0)                               # layers 3-4 hidden
+        self.assertEqual(r["layer"], 1)
+        r = d4_qt.live_ranges(counts, 150, show_rest=True)
+        self.assertEqual(r["rest"], (200, 200))                         # see-through when asked
+        r = d4_qt.live_ranges(counts, 200, show_rest=False)             # layer 2 just finished
+        self.assertEqual((r["layer"], r["plan"]), (2, (200, 100)))      # plan = the next layer
+        r = d4_qt.live_ranges(counts, 400, show_rest=True)              # all done
+        self.assertEqual((r["printed"], r["plan"][1], r["rest"][1]), ((0, 400), 0, 0))
+        r = d4_qt.live_ranges(counts, 0, show_rest=False)               # heating: nothing yet
+        self.assertEqual((r["printed"][1], r["trail"][1], r["plan"]), (0, 0, (0, 100)))
+
+    def test_show_rest_button_only_while_live(self):
+        tp = d4_qt.Toolpath(self.path)
+        fa = self.w.file_area
+        fa.set_result(tp, None, keep_model=False)
+        fa.current = "paths"                                            # (no OpenGL in the tests)
+        fa.set_live(10, 0, None)
+        self.assertFalse(fa.rest_btn.isHidden())
+        fa.clear_live()
+        self.assertTrue(fa.rest_btn.isHidden())
+        fa.set_result(None, None, keep_model=False)
+
+    def test_live_view_not_for_another_file(self):
+        self.settle_preview()
+        tp = d4_qt.Toolpath(self.path)
+        self.w._paths_cache[self.path] = (os.path.getmtime(self.path), tp)
+        self.w.file_area.set_result(None, None, keep_model=False)        # another file on show
+        self.w.start_print()
+        self.w.on_progress(10 ** 6, 10 ** 6, 1.0)
+        self.assertIsNone(self.w.file_area.live)
+        self.w.on_print_done(True, "Print finished")
 
     def test_set_now_during_print(self):
         self.w.printing = True
