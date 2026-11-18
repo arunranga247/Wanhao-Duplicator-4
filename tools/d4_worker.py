@@ -5,17 +5,20 @@ The ONLY code that touches the serial port. The GUI talks to it through
 Worker.submit(job, *args) and receives events (tuples) on a queue:
   ("log", msg) ("alarm", msg) ("connected", port, fw) ("disconnected", reason)
   ("status", dict) ("progress", sent, total, elapsed_s) ("print_done", ok, msg)
+  ("layer", dict) - the layer the printer is on (also saved to last_print.json for resuming)
 """
 
 __author__ = "ARUN"
 __copyright__ = "Copyright (c) 2026 ARUN"
 
+import json
 import os
 import queue
 import struct
 import threading
 import time
 
+import d4_core as core
 import s3g_link as s3g
 
 POLL_IDLE_S = 0.5
@@ -80,6 +83,7 @@ class Worker(threading.Thread):
         self._last_poll = 0.0
         self.bed_timer_s = 0           # > 0: bad bed sensor - bed heats at most this long, then OFF
         self.bed_off_at = None         # when the running bed timer switches the bed off
+        self.record_path = None        # last_print.json: layer + nozzle position, to resume a stopped print
 
     # ---- public (called from GUI thread) ---------------------------------
     def submit(self, name, *args):
@@ -90,6 +94,8 @@ class Worker(threading.Thread):
 
     # ---- helpers -----------------------------------------------------------
     def post(self, *ev):
+        if ev[0] == "print_done" and self.print_job is not None:
+            self._record("finished" if ev[1] else "stopped", None if ev[1] else ev[2])
         self.events.put(ev)
 
     def log(self, msg):
@@ -277,6 +283,8 @@ class Worker(threading.Thread):
             self.print_job = {"cmds": cmds, "i": 0, "name": os.path.basename(path), "t0": time.time(),
                               "bed": None if bed is None else int(bed),
                               "nozzle": None if nozzle is None else int(nozzle), "path": path}
+            self._layers_for(self.print_job)
+            self._record("printing")
             self.log("USB print started: %s (%d commands)%s" % (
                 os.path.basename(path), len(cmds),
                 "" if bed is None else " - bed %d C for this print, no waiting for the bed" % int(bed)))
@@ -362,6 +370,78 @@ class Worker(threading.Thread):
                 self.post("print_done", True, "Print finished: %s in %.1f min"
                           % (job["name"], (time.time() - job["t0"]) / 60))
                 self.print_job = None
+
+    # ---- which layer is printing (to find it again after a stop) -------------
+    def _layers_for(self, job):
+        """Layer table of the file + its G-code (same name, .gcode) when the layers match."""
+        lay = s3g.x3g_layers(job["cmds"])
+        gpath, zs, first = os.path.splitext(job["path"])[0] + ".gcode", [], 1
+        if os.path.exists(gpath):
+            try:
+                zs, first = core.gcode_layers(gpath)
+            except (OSError, ValueError):
+                zs = []
+        if not zs or len(zs) != len(lay["starts"]):
+            gpath, zs, first = None, [], 1                # not this file's G-code: layer count only
+        tool = lay["tools"][0] if lay["tools"] else 1
+        temps = [(i, struct.unpack("<h", bytes(c[4:6]))[0]) for i, c in enumerate(job["cmds"])   # printing
+                 if c[0] == 136 and len(c) >= 6 and c[1] == tool and c[2] == 3                     # temperature
+                 and struct.unpack("<h", bytes(c[4:6]))[0] >= NOZZLE_PRINT_MIN_C]                  # changes
+        job.update(layers=lay, gcode=gpath, zs=zs, first=first, layer=-1, pos=None, tool=tool, temps=temps)
+
+    @staticmethod
+    def _temp_at(job):
+        """Nozzle temperature in force where the current layer starts (first layer is often hotter)."""
+        if job.get("nozzle"):
+            return job["nozzle"]
+        k, temps = job.get("layer", -1), job.get("temps") or []
+        at = job["layers"]["starts"][k] if k >= 0 else 0
+        t = [v for i, v in temps if i <= at]
+        return t[-1] if t else (temps[0][1] if temps else None)
+
+    def _track_layer(self, pos, paused):
+        job = self.print_job
+        lay = job.get("layers")
+        if not lay or not lay["starts"]:
+            return
+        if not paused:                                    # paused: the head is parked, not printing
+            job["pos"] = list(pos[:3])
+            k = core.printing_layer(lay["starts"], lay["z"], job["i"], pos[2])
+        else:
+            k = job["layer"]
+        changed = k != job["layer"]
+        job["layer"] = k
+        if changed and k >= 0:
+            self.post("layer", self._layer_info(job))
+        if changed or time.time() - job.get("rec_t", 0) > 5:
+            self._record("printing")
+
+    @staticmethod
+    def _layer_info(job):
+        k, zs, first = job["layer"], job["zs"], job["first"]
+        return {"layer": first + k if k >= 0 else None, "layers": first + len(job["layers"]["starts"]) - 1,
+                "z_slicer": zs[k] if zs and k >= 0 else None}
+
+    def _record(self, state, reason=None):
+        """Save where the print is (atomic write: a power cut never leaves half a file)."""
+        job = self.print_job
+        if not self.record_path or job is None or "layers" not in job:
+            return
+        job["rec_t"] = time.time()
+        lay, zs = job["layers"], job["zs"]
+        pos = job.get("pos") or [None, None, None]
+        rec = dict(self._layer_info(job), file=job["name"], x3g=job["path"], gcode=job["gcode"], state=state,
+                   reason=reason, x=pos[0], y=pos[1], z=pos[2], tool=job["tool"],
+                   two_tools=len(lay["tools"]) > 1, temp=self._temp_at(job),
+                   z_offset=round(lay["z"][0] - zs[0], 3) if zs and lay["z"] and lay["z"][0] is not None else None,
+                   bed=job.get("bed"), time=time.strftime("%Y-%m-%d %H:%M:%S"))
+        try:
+            tmp = self.record_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh, indent=1)
+            os.replace(tmp, self.record_path)
+        except OSError:
+            pass
 
     # ---- status + heater watchdog -------------------------------------------
     def _wd_arm(self, key, target):
@@ -466,4 +546,6 @@ class Worker(threading.Thread):
         self._bed_timer(t)                            # also while paused: time is the only limit
         if tuple(steps[:3]) == s3g.HOME_STEPS[:3]:
             self.homed = True                  # home offsets recalled after a full home
+        if self.print_job is not None:
+            self._track_layer(pos, paused)
         self.post("status", {"t": t, "pos": pos, "es": es, "board": st, "homed": self.homed})

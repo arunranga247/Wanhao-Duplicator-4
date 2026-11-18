@@ -314,5 +314,58 @@ class Settings(unittest.TestCase):
             self.assertEqual(c.resolve_theme("garbage"), "dark")
 
 
+class ResumeHelpers(unittest.TestCase):
+    GCODE = ("M83\n;LAYER_CHANGE\n;Z:0.3\nG1 Z0.3\n;LAYER_CHANGE\n;Z:0.4\nG1 Z0.4\n"
+             ";LAYER_CHANGE\n;Z:0.5\nG1 Z0.5\n")
+
+    def write(self, d, text, name="P.gcode"):
+        p = os.path.join(d, name)
+        with open(p, "w") as fh:
+            fh.write(text)
+        return p
+
+    def test_gcode_layers(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(c.gcode_layers(self.write(d, self.GCODE)), ([0.3, 0.4, 0.5], 1))
+            tagged = c.RESUME_TAG + "136\n" + self.GCODE         # a resume file keeps the original numbers
+            self.assertEqual(c.gcode_layers(self.write(d, tagged))[1], 136)
+
+    def test_printing_layer(self):
+        starts, z = [10, 50, 90], [0.34, 0.44, 0.54]
+        self.assertEqual(c.printing_layer(starts, z, 5), -1)            # still heating / priming
+        self.assertEqual(c.printing_layer(starts, z, 60), 1)            # layer 2 sent
+        self.assertEqual(c.printing_layer(starts, z, 60, 0.44), 1)
+        self.assertEqual(c.printing_layer(starts, z, 60, 0.34), 0)      # printer still on layer 1 (buffer)
+        self.assertEqual(c.printing_layer(starts, z, 95, 5.0), 2)       # head lifted: never past what was sent
+
+    def test_resume_name(self):
+        self.assertEqual(c.resume_name("BUST.x3g", 136), "BUST_RESUME_L136")
+        self.assertEqual(c.resume_name("BUST_RESUME_L136.x3g", 170), "BUST_RESUME_L170")
+        self.assertLessEqual(len(c.resume_name("A_VERY_LONG_FILE_NAME_HERE.x3g", 1234)), 24)
+
+    def test_resume_args(self):
+        rec = {"file": "BUST.x3g", "gcode": "g.gcode", "tool": 1, "temp": 215, "z_offset": 0.04}
+        name, args = c.resume_args(rec, 137, [13.7, 13.8, 13.9], 136)
+        self.assertEqual(name, "BUST_RESUME_L137")
+        self.assertEqual(args[args.index("--from-z") + 1], "13.8")
+        self.assertEqual(args[args.index("--only") + 1], "left")
+        self.assertEqual(args[args.index("--temp") + 1], "215")
+        self.assertEqual(args[args.index("--z-offset") + 1], "0.04")
+        self.assertEqual(args[args.index("--layer-no") + 1], "137")
+        with self.assertRaises(ValueError):
+            c.resume_args(rec, 200, [13.7, 13.8, 13.9], 136)
+
+    def test_stopped_text(self):
+        rec = {"file": "BUST.x3g", "state": "stopped", "layer": 136, "layers": 232, "z_slicer": 13.8,
+               "x": 1.0, "y": 2.0, "z": 13.84, "reason": "USB link lost"}
+        t = c.stopped_text(rec)
+        self.assertIn("layer 136 of 232", t)
+        self.assertIn("Z 13.80", t)
+        self.assertIn("USB link lost", t)
+        self.assertEqual(c.stopped_text(dict(rec, state="finished")), "")
+        self.assertEqual(c.stopped_text(dict(rec, layer=None)), "")       # stopped before layer 1
+        self.assertIn("did not finish", c.stopped_text(dict(rec, state="printing", reason=None)))
+
+
 if __name__ == "__main__":
     unittest.main()

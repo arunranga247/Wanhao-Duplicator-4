@@ -82,7 +82,7 @@ SWAP_PURGE_MM = 6.0      # purge of the new nozzle (in the air, in front of the 
 
 
 def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, log=print,
-            color_z=None, tool2=None, temp2=None, first_temp=None, bed=0, tilt_x=0.0, tools=None):
+            color_z=None, tool2=None, temp2=None, first_temp=None, bed=0, tilt_x=0.0, tools=None, travel_z=5.0):
     """color_z: print every layer ABOVE this height (mm) with tool2 (the other extruder).
     One colour change per print -> clean two-colour parts on a dual-nozzle machine.
     tools: two parts in two colours (G-code from a 2-extruder slice with T0 / T1 changes):
@@ -90,6 +90,7 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     for the whole print; every T change is a software nozzle shift (never the bogus firmware T1).
     bed: heated-bed temperature (0 = off). Only the converter sets it - bed commands inside the
     G-code are ignored - and it is capped at BED_MAX_C.
+    travel_z: height of the first travel after homing (resume on a part already on the bed: above it).
     tilt_x: bed tilt compensation, mm per 100 mm toward the RIGHT. + lifts the nozzle on the right
     (right side squashed / paper tight), - lowers it (right side gap too big). Centre unchanged."""
     if abs(tilt_x) > TILT_MAX:
@@ -128,7 +129,7 @@ def convert(gcode_path, out_path, name=None, tool=1, z_offset=0.0, prime=True, l
     p.set_temp(1, 0)                                  # heaters OFF until homing worked
     p.change_tool(0)
     p.home(z_fast=5.0, z_timeout=40)                  # slow Z homing - proven safe
-    p.move(z=5.0, f=5.0)
+    p.move(z=max(5.0, float(travel_z)), f=5.0)      # head travels above anything on the bed
     two_parts = tools is not None
     if two_parts:
         if color_z:

@@ -7,6 +7,7 @@ tested on its own, and the Qt window and the old Tk window follow exactly the sa
 __author__ = "ARUN"
 __copyright__ = "Copyright (c) 2026 ARUN"
 
+import bisect
 import json
 import os
 import re
@@ -318,6 +319,77 @@ def progress(st, i, n):
         done_t = st["cum"][min(i, len(st["cum"])) - 1] if i else 0.0
         frac, left = done_t / st["time_s"], max(0.0, st["time_s"] - done_t)
     return max(0.0, min(1.0, frac)), left
+
+
+# ---- where a print stopped (layer / height / nozzle) and how to finish it -------------------
+RESUME_TAG = "; resume: from layer "      # written into a resume file's G-code: its first layer number
+LAST_PRINT = "last_print.json"           # in the output folder: the running / last print, layer by layer
+
+
+def gcode_layers(path):
+    """-> (slicer Z of every layer, number of the first layer). A resume file's G-code starts
+    at the layer it resumes, so its layers keep the ORIGINAL print's numbers."""
+    zs, first, prev = [], 1, ""
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for ln in fh:
+            if ln.startswith(RESUME_TAG):
+                first = int(ln[len(RESUME_TAG):].split()[0])
+            elif ln.startswith(";Z:") and prev.startswith(";LAYER_CHANGE"):
+                zs.append(float(ln[3:]))
+            prev = ln
+    return zs, first
+
+
+def printing_layer(starts, layer_z, sent_i, printer_z=None):
+    """0-based layer the printer is on (-1 = not at layer 1 yet). The layer of the last command
+    SENT, stepped back while the printer's real Z is still below that layer: the printer keeps a
+    few moves in its buffer, so the newest layer sent may not have started yet."""
+    k = bisect.bisect_right(starts, sent_i - 1) - 1
+    if printer_z is not None:
+        while k >= 0 and layer_z[k] is not None and printer_z < layer_z[k] - 0.05:
+            k -= 1
+    return k
+
+
+def load_last_print(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        return rec if isinstance(rec, dict) and rec.get("file") else None
+    except (OSError, ValueError):
+        return None
+
+
+def stopped_text(rec):
+    """One line for the Print tab: where the last unfinished print stopped."""
+    if not rec or rec.get("state") == "finished" or not rec.get("layer"):
+        return ""
+    where = "layer %d of %d" % (rec["layer"], rec["layers"]) if rec.get("layers") else "layer %d" % rec["layer"]
+    z = rec.get("z_slicer")
+    pos = "  ·  nozzle X %.1f  Y %.1f  Z %.2f mm" % (rec["x"], rec["y"], rec["z"]) if rec.get("x") is not None else ""
+    why = rec.get("reason") or "did not finish (app closed, PC or power off?)"
+    return "⚠ %s stopped at %s%s%s\n%s" % (rec["file"], where, " (Z %.2f mm)" % z if z is not None else "", pos, why)
+
+
+def resume_name(file_name, layer_no):
+    """BUST.x3g, 136 -> BUST_RESUME_L136 (an older resume suffix is replaced, not stacked)."""
+    stem = os.path.splitext(os.path.basename(file_name))[0].upper()
+    stem = re.sub(r"_RESUME(_L\d+)?$", "", stem)
+    suffix = "_RESUME_L%d" % layer_no
+    return stem[:24 - len(suffix)] + suffix
+
+
+def resume_args(rec, layer_no, zs, first):
+    """resume_print.py arguments that finish `rec` (a last_print record) from layer `layer_no`
+    (numbered like the original print). zs / first: gcode_layers() of its G-code."""
+    k = layer_no - first
+    if not 0 <= k < len(zs):
+        raise ValueError("layer %d is not in this print (layers %d - %d)" % (layer_no, first, first + len(zs) - 1))
+    name = resume_name(rec["file"], layer_no)
+    return name, ["--gcode", rec["gcode"], "--from-z", "%g" % zs[k], "--name", name,
+                  "--only", "right" if rec.get("tool") == 0 else "left", "--temp", str(int(rec.get("temp") or 210)),
+                  "--bed", "0", "--z-offset", "%.2f" % float(rec.get("z_offset") or 0.0),
+                  "--layer-no", str(layer_no)]
 
 
 def temp_state(cur, tgt):

@@ -297,3 +297,40 @@ def x3g_stats(cmds):
         cum.append(t)
     return {"time_s": t, "cum": cum, "fil": fil, "zmax": zmax, "zprint": zprint, "z_home": z_home,
             "temps": temps, "bed": bed, "t1_change": t1, "n": len(cmds)}
+
+
+def x3g_layers(cmds):
+    """Where every layer starts in a split .x3g made by this project's converter.
+
+    The converter writes one "build %" command (150) at each layer change; the one before homing
+    and the 100 % at the end are not layers. Returns dict:
+      starts  - command index where each layer starts (layer 1 = starts[0])
+      z       - machine Z (mm) of each layer: the first extruding XY move in it (None if none)
+      tools   - extruders that push filament (0 right, 1 left), first-used first"""
+    starts, z = [], []
+    pos = [0, 0, 0, 0, 0]
+    moved = False
+    tools = []
+    for i, c in enumerate(cmds):
+        k = c[0]
+        if k == 150:
+            if moved and c[1] < 100:
+                starts.append(i)
+                z.append(None)
+        elif k == 155:
+            moved = True
+            tgt = struct.unpack("<5i", c[1:21])
+            rel = c[25]
+            new = [pos[j] + tgt[j] if rel >> j & 1 else tgt[j] for j in range(5)]
+            pushing = [e - 3 for e in (3, 4) if (new[e] - pos[e]) * EXTRUDE_SIGN > 0]
+            for e in pushing:
+                if e not in tools:
+                    tools.append(e)
+            if pushing and z and z[-1] is None and (new[0] != pos[0] or new[1] != pos[1]):
+                z[-1] = new[2] / SPM[2]
+            pos = new
+        elif k == 140:
+            pos = list(struct.unpack("<5i", c[1:21]))
+        elif k == 144:
+            pos = [HOME_STEPS[j] if c[1] >> j & 1 else pos[j] for j in range(5)]
+    return {"starts": starts, "z": z, "tools": tools}

@@ -10,10 +10,12 @@ import os
 import queue
 import struct
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import s3g_link as s3g                    # noqa: E402
+import d4_core as core                    # noqa: E402
 from d4_worker import Worker, bed_override, nozzle_override  # noqa: E402
 
 BED60 = struct.pack("<BBBBh", 136, 0, 31, 2, 60)
@@ -165,6 +167,91 @@ class BedTimer(unittest.TestCase):
         self.w._bed_timer({"bed": 1, "bed_t": 60})
         self.assertIsNone(self.w.bed_off_at)
         self.assertEqual(self.w.link.sent, [])
+
+
+def mv(x, y, z, b):
+    """Absolute move in mm (left extruder b in steps, fed in = negative steps)."""
+    S = s3g.SPM
+    return struct.pack("<B5iIBfH", 155, round(x * S[0]), round(y * S[1]), round(z * S[2]), 0, b, 1000, 0, 1.0, 64)
+
+
+def pct(v):
+    return bytes([150, v, 0])
+
+
+LAYERED = [pct(0), BED0, mv(0, 0, 5, 0), struct.pack("<BBBBh", 136, 1, 3, 2, 215),
+           pct(0), mv(1, 1, 0.34, 0), mv(5, 1, 0.34, -100),          # layer 1 at 0.34 (z offset +0.04)
+           pct(50), mv(5, 1, 0.44, -100), mv(1, 1, 0.44, -200),       # layer 2
+           pct(99), mv(1, 1, 0.54, -200), mv(5, 5, 0.54, -300),       # layer 3
+           pct(100), BED0]
+GCODE3 = "M83\n;LAYER_CHANGE\n;Z:0.3\n;LAYER_CHANGE\n;Z:0.4\n;LAYER_CHANGE\n;Z:0.5\n"
+
+
+class Layers(unittest.TestCase):
+    def test_x3g_layers(self):
+        lay = s3g.x3g_layers(LAYERED)
+        self.assertEqual(lay["starts"], [4, 7, 10])                  # not the header 0 %, not the end 100 %
+        self.assertEqual([round(z, 2) for z in lay["z"]], [0.34, 0.44, 0.54])
+        self.assertEqual(lay["tools"], [1])
+
+    def test_tracks_layer_and_saves_where_it_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "PART.x3g")
+            with open(path, "wb") as fh:
+                fh.write(b"".join(LAYERED))
+            with open(os.path.join(d, "PART.gcode"), "w") as fh:
+                fh.write(GCODE3)
+            ev = queue.Queue()
+            w = Worker(ev)
+            w.record_path = os.path.join(d, core.LAST_PRINT)
+            w.print_job = {"cmds": LAYERED, "i": 0, "name": "PART.x3g", "t0": 0.0, "bed": 50, "nozzle": None,
+                           "path": path}
+            w._layers_for(w.print_job)
+            w.print_job["i"] = 9                                      # layer 2 sent ...
+            w._track_layer([3.0, 1.0, 0.34], False)                   # ... printer still on layer 1
+            w._track_layer([4.0, 1.0, 0.44], False)                   # now on layer 2
+            layers = [e[1]["layer"] for e in list(ev.queue) if e[0] == "layer"]
+            self.assertEqual(layers, [1, 2])
+            w._track_layer([0.0, 0.0, 40.0], True)                    # paused: head parked, layer kept
+            w.post("print_done", False, "USB link lost during print")
+            rec = core.load_last_print(w.record_path)
+            self.assertEqual((rec["layer"], rec["layers"], rec["z_slicer"]), (2, 3, 0.4))
+            self.assertEqual((rec["x"], rec["y"], rec["z"]), (4.0, 1.0, 0.44))   # where it really printed
+            self.assertEqual((rec["state"], rec["reason"]), ("stopped", "USB link lost during print"))
+            self.assertEqual((rec["tool"], rec["temp"], rec["z_offset"], rec["two_tools"]), (1, 215, 0.04, False))
+            self.assertEqual(rec["gcode"], os.path.join(d, "PART.gcode"))
+            self.assertFalse(os.path.exists(w.record_path + ".tmp"))
+
+    def test_finished_print_is_marked_finished(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "PART.x3g")
+            w = Worker(queue.Queue())
+            w.record_path = os.path.join(d, core.LAST_PRINT)
+            w.print_job = {"cmds": LAYERED, "i": 13, "name": "PART.x3g", "t0": 0.0, "path": path}
+            w._layers_for(w.print_job)
+            w._track_layer([5.0, 5.0, 0.54], False)
+            w.post("print_done", True, "Print finished")
+            self.assertEqual(core.load_last_print(w.record_path)["state"], "finished")
+
+    def test_gcode_of_another_print_is_not_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "PART.x3g")
+            with open(os.path.join(d, "PART.gcode"), "w") as fh:
+                fh.write("M83\n;LAYER_CHANGE\n;Z:0.3\n")                # 1 layer, the file has 3
+            job = {"cmds": LAYERED, "path": path}
+            Worker(queue.Queue())._layers_for(job)
+            self.assertIsNone(job["gcode"])
+            self.assertEqual(Worker._layer_info(dict(job, layer=2))["layers"], 3)
+
+    def test_resume_temperature_is_the_one_at_that_layer(self):    # first layer 220, then 210
+        cmds = list(LAYERED)
+        cmds[3] = struct.pack("<BBBBh", 136, 1, 3, 2, 220)
+        cmds.insert(7, struct.pack("<BBBBh", 136, 1, 3, 2, 210))        # just before layer 2 starts
+        job = {"cmds": cmds, "path": "X.x3g", "nozzle": None}
+        Worker(queue.Queue())._layers_for(job)
+        self.assertEqual(Worker._temp_at(dict(job, layer=0)), 220)
+        self.assertEqual(Worker._temp_at(dict(job, layer=2)), 210)
+        self.assertEqual(Worker._temp_at(dict(job, layer=2, nozzle=230)), 230)   # "This print" nozzle wins
 
 
 if __name__ == "__main__":

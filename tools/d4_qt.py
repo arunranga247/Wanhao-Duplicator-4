@@ -36,7 +36,7 @@ from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QKeySequence, QMatrix4x
 from PySide6.QtOpenGL import QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
-                               QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+                               QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
                                QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QRadioButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStackedLayout, QStatusBar,
                                QTabWidget, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -1199,6 +1199,8 @@ class MainWindow(QMainWindow):
         self.worker = worker or Worker(self.events)
         if worker is not None:
             worker.events = self.events
+        self.last_print_path = os.path.join(OUT, core.LAST_PRINT)
+        self.worker.record_path = self.last_print_path
         if not self.worker.is_alive() and hasattr(self.worker, "start"):
             self.worker.start()
         self.hist = collections.deque()
@@ -1220,6 +1222,7 @@ class MainWindow(QMainWindow):
         self._restore_ui()
         self.refresh_ports(autoconnect=True)
         self.refresh_library(select=self.ui.get("last_file"))
+        self.show_last_print()                          # a print that stopped last time: where + resume
         self.timers = []
         for ms, fn in ((100, self.pump), (3000, self.watch_ports), (15000, self.save_ui)):
             t = QTimer(self)
@@ -1239,6 +1242,11 @@ class MainWindow(QMainWindow):
 
     def ask(self, title, text):
         return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
+
+    def ask_layer(self, title, text, value, lo, hi):
+        """-> chosen layer number, or None (cancelled)."""
+        v, ok = QInputDialog.getInt(self, title, text, value, lo, hi, 1)
+        return v if ok else None
 
     def ask_ok(self, title, text):
         r = QMessageBox.question(self, title, text, QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
@@ -2073,8 +2081,9 @@ class MainWindow(QMainWindow):
         b.addWidget(self.prog)
         grid = QGridLayout()
         self.job_vals = {}
-        for i, (k, lab) in enumerate((("pct", "Done"), ("elapsed", "Elapsed"), ("left", "Time left"),
-                                      ("z", "Height (Z)"), ("fil", "Filament used"), ("noz", "Nozzle"))):
+        for i, (k, lab) in enumerate((("pct", "Done"), ("layer", "Layer"), ("elapsed", "Elapsed"),
+                                      ("left", "Time left"), ("z", "Height (Z)"), ("fil", "Filament used"),
+                                      ("noz", "Nozzle"))):
             cell = QVBoxLayout()
             cell.setSpacing(0)
             cell.addWidget(label(lab, tone="dim"))
@@ -2083,6 +2092,18 @@ class MainWindow(QMainWindow):
             grid.addLayout(cell, 0, i)                    # one row of 6: the card stays short
             self.job_vals[k] = v
         b.addLayout(grid)
+        self.resume_box = QWidget()                       # shown when the last print did not finish
+        rr = QHBoxLayout(self.resume_box)
+        rr.setContentsMargins(0, 4, 0, 0)
+        rr.setSpacing(8)
+        self.resume_lbl = label("", tone="warn", wrap=True)
+        rr.addWidget(self.resume_lbl, 1)
+        self.resume_btn = button("↻ Resume from layer…", self.make_resume, kind="tonal",
+                                 tip="Make a file that prints the rest of this object ON TOP of the part "
+                                     "still on the bed")
+        rr.addWidget(self.resume_btn, 0)
+        self.resume_box.hide()
+        b.addWidget(self.resume_box)
         # top of the RIGHT column, above the preview: on a laptop screen the left column (file list +
         # file info) has no height to spare, and a squeezed job card cut off its numbers
         right.insertWidget(0, o, 0)
@@ -2282,6 +2303,7 @@ class MainWindow(QMainWindow):
         self.job_file = os.path.basename(path)
         self._set_prog(0.0, done=False)
         self.job_name.setText("⏳ Homing, then heating - " + self.job_file)
+        self.resume_box.hide()
         for v in self.job_vals.values():
             v.setText("—")
         nozzle = self.print_nozzle_choice()
@@ -2506,6 +2528,83 @@ class MainWindow(QMainWindow):
         self.job_vals["elapsed"].setText(core.fmt_min(elapsed))
         self.job_vals["left"].setText(core.fmt_min(left) if left is not None else "—")
 
+    def on_layer(self, info):
+        """The worker found a new layer: show it (it is also saved in last_print.json)."""
+        if not self.printing or info.get("layer") is None:
+            return
+        self.job_vals["layer"].setText("%d / %d" % (info["layer"], info["layers"]))
+        if self.heat_phase is None:
+            z = info.get("z_slicer")
+            self.job_name.setText("▶ Printing - %s  ·  layer %d of %d%s" % (
+                self.job_file, info["layer"], info["layers"], "  (Z %.2f mm)" % z if z is not None else ""))
+
+    # ---- stopped print: where it stopped + a resume file from there -----------------------
+    def show_last_print(self):
+        rec = None if self.printing else core.load_last_print(self.last_print_path)
+        text = core.stopped_text(rec)
+        self.resume_box.setVisible(bool(text))
+        if not text:
+            return
+        if rec.get("two_tools"):
+            text += "\nTwo-nozzle print: resume is for one-nozzle prints only."
+        elif not rec.get("gcode") or not os.path.exists(rec["gcode"]):
+            text += "\nNo G-code next to this file, so a resume file cannot be made from it."
+        self.resume_lbl.setText(text)
+        self.resume_btn.setEnabled(bool(rec.get("gcode")) and os.path.exists(rec["gcode"]) and not rec.get("two_tools"))
+
+    def make_resume(self):
+        rec = core.load_last_print(self.last_print_path)
+        if not rec or not rec.get("gcode") or not os.path.exists(rec["gcode"]):
+            self.info("Resume", "No stopped print with its G-code to resume.")
+            return
+        zs, first = core.gcode_layers(rec["gcode"])
+        last = first + len(zs) - 1
+        n = rec.get("layer") or first
+        layer = self.ask_layer(
+            "Resume print",
+            "%s stopped at layer %d of %d.\n\n"
+            "Layer %d was being printed - it may be only half done.\n"
+            "Look at the top of the part: if layer %d looks COMPLETE, choose %d.\n\n"
+            "Leave the part on the bed - if it moved, the new layers will not line up.\n\n"
+            "Print again from layer:" % (rec["file"], n, last, n, n, min(n + 1, last)),
+            n, first, last)
+        if layer is None:
+            return
+        try:
+            name, args = core.resume_args(rec, layer, zs, first)
+        except ValueError as e:
+            self.error("Resume", str(e))
+            return
+        self.resume_btn.setEnabled(False)
+        self.resume_lbl.setText("Making %s.x3g …" % name)
+        threading.Thread(target=self._resume_worker, args=(name, args, layer), daemon=True).start()
+
+    def _resume_worker(self, name, args, layer):
+        path = os.path.join(OUT, name + ".x3g")
+        try:
+            code, sout, serr = run_tool("resume_print.py", args)
+            ok = code == 0 and os.path.exists(path)
+            if ok:
+                ok = self._run_checker(path)[0]
+            self.events.put(("resume_done", ok, name, layer, ((serr or "") + "\n" + (sout or "")).strip()[-600:]))
+        except Exception as e:                                 # noqa: BLE001
+            self.events.put(("resume_done", False, name, layer, "Error: %s" % e))
+
+    def on_resume_done(self, ok, name, layer, text):
+        self.show_last_print()
+        path = os.path.join(OUT, name + ".x3g")
+        if not ok:
+            self.log("Resume file %s: problem - %s" % (name, text), "alarm")
+            self.error("Resume", "Could not make the resume file:\n" + text)
+            return
+        self.log("Resume file ready: %s.x3g (from layer %d)" % (name, layer), "ok")
+        self.refresh_library(select=path)
+        self.info("Resume", "%s.x3g is selected in the list.\n\n"
+                            "It homes away from the part, lowers the bed so the head passes ABOVE the part, "
+                            "heats, primes a line at the front edge, then prints from layer %d to the top.\n\n"
+                            "Set the bed under 'This print' if you want it, then press 'Print selected file'."
+                  % (name, layer))
+
     def on_phase(self, kind, tool):
         if kind == "heat":
             self.heat_phase = tool
@@ -2537,8 +2636,12 @@ class MainWindow(QMainWindow):
             self.job_vals["pct"].setText("100 %")
             self.job_vals["left"].setText("0:00")
         self.log(msg, "ok" if ok else "alarm")
+        self.show_last_print()
         if not ok:
-            self.warn("Print stopped", msg)
+            rec = core.load_last_print(self.last_print_path)
+            where = core.stopped_text(rec).split("\n")[0][2:] if rec else ""
+            self.warn("Print stopped", msg + ("\n\n" + where + "\n\nUse 'Resume from layer…' on the Print tab "
+                                                     "to finish it." if where else ""))
 
     def on_status(self, s):
         t = s["t"]

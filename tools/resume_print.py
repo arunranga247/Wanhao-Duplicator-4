@@ -8,7 +8,8 @@ was NOT printed. Pick the layer above the last COMPLETE one - re-printing a half
 would drive the nozzle into the plastic that is already there.
 
 The new file homes X/Y first (nozzle parks off the bed corner, away from the part), homes Z,
-heats, primes in front of the part, LIFTS above the part before any sideways move, then prints
+lowers the bed so the head travels ABOVE the part, heats, primes in front of the part, lifts
+above the part again, then prints
 only the layers from --from-z up. Same bed position as the original (same G-code), so the new
 layers land exactly on the old ones.
 """
@@ -25,8 +26,13 @@ import d4_paths
 from gcode2x3g import ConvertError, convert
 
 
-def resume_lines(lines, from_z):
-    """Header (units / modes) + safe lift + every layer from the one at from_z. Relative E only."""
+RESUME_TAG = "; resume: from layer "      # same text as d4_core.RESUME_TAG: layer numbers stay the original's
+
+
+def resume_lines(lines, from_z, layer_no=None):
+    """Header (units / modes) + safe lift + every layer from the one at from_z. Relative E only.
+    layer_no: number of that layer in the ORIGINAL print (tagged, so the app shows the same numbers
+    while the resume file prints - and a resume of a resume continues counting)."""
     if not any(ln.startswith("M83") for ln in lines[:40]):
         raise ConvertError("only relative-extrusion G-code (M83, PrusaSlicer default here) can be resumed")
     first = next(i for i, ln in enumerate(lines) if ln.startswith(";LAYER_CHANGE"))
@@ -35,8 +41,13 @@ def resume_lines(lines, from_z):
                None)
     if cut is None:
         raise ConvertError("no layer at Z %g in this G-code" % from_z)
+    if layer_no is None:                                 # count the layers before the cut
+        start = next((int(ln[len(RESUME_TAG):].split()[0]) for ln in lines[:first] if ln.startswith(RESUME_TAG)), 1)
+        layer_no = start + sum(1 for ln in lines[first:cut] if ln.startswith(";LAYER_CHANGE"))
+    head = [ln for ln in lines[:first] if "; resume:" not in ln]      # a resume of a resume: old tags out
     lift = "G1 Z%.2f F600 ; resume: lift clear of the part BEFORE any sideways move" % (from_z + 1.0)
-    return lines[:first] + [lift] + lines[cut:], sum(1 for ln in lines[cut:] if ln.startswith(";LAYER_CHANGE"))
+    return (head + [RESUME_TAG + "%d" % layer_no, lift] + lines[cut:],
+            sum(1 for ln in lines[cut:] if ln.startswith(";LAYER_CHANGE")))
 
 
 def main():
@@ -49,11 +60,12 @@ def main():
     ap.add_argument("--temp", type=int, default=220)
     ap.add_argument("--bed", type=int, default=60)
     ap.add_argument("--z-offset", type=float, default=-0.05, help="must match the original print")
+    ap.add_argument("--layer-no", type=int, default=None, help="number of that layer in the original print")
     a = ap.parse_args()
     src = os.path.abspath(a.gcode)
     lines = open(src, encoding="utf-8", errors="replace").read().splitlines()
     try:
-        body, n_layers = resume_lines(lines, a.from_z)
+        body, n_layers = resume_lines(lines, a.from_z, a.layer_no)
     except (ConvertError, StopIteration) as e:
         sys.exit("Cannot resume: %s" % e)
     name = (a.name or os.path.splitext(os.path.basename(src))[0] + "_RESUME").upper()[:24]
@@ -63,7 +75,8 @@ def main():
         open(g, "w", encoding="utf-8").write("\n".join(body) + "\n")
         try:
             res = convert(g, out_x3g, name=name, tool=0 if a.only == "right" else 1, z_offset=a.z_offset,
-                          log=lambda m: None, first_temp=a.temp, temp2=a.temp, bed=a.bed)
+                          log=lambda m: None, first_temp=a.temp, temp2=a.temp, bed=a.bed,
+                          travel_z=a.from_z + a.z_offset + 2.0)   # never sweep through the part
         except ConvertError as e:
             sys.exit("Conversion refused: %s" % e)
         open(os.path.join(a.out, name + ".gcode"), "w", encoding="utf-8").write("\n".join(body) + "\n")

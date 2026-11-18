@@ -7,6 +7,7 @@ Tests for the Qt window: every control, safety rule, printer event and dialog, w
 
 __author__ = "ARUN"
 
+import json
 import os
 import shutil
 import sys
@@ -441,6 +442,84 @@ class Printing(Base):
         self.assertEqual(self.sent(), [("set_nozzle", 215)])
         self.w.print_nozzle.setValue(175)                 # 175 = "as in file"
         self.assertIsNone(self.w.print_nozzle_choice())
+
+    def test_layer_shown_while_printing(self):
+        self.w.start_print()
+        self.w.on_phase("print", None)
+        self.w.on_layer({"layer": 136, "layers": 232, "z_slicer": 13.8})
+        self.assertEqual(self.w.job_vals["layer"].text(), "136 / 232")
+        self.assertIn("layer 136 of 232", self.w.job_name.text())
+        self.assertIn("Z 13.80", self.w.job_name.text())
+
+    def write_record(self, **kw):
+        g = os.path.join(OUT_T, "T_PRINT.gcode")
+        with open(g, "w") as fh:
+            fh.write("M83\n" + "".join(";LAYER_CHANGE\n;Z:%g\n" % (0.3 + 0.1 * k) for k in range(10)))
+        rec = {"file": "T_PRINT.x3g", "x3g": self.path, "gcode": g, "state": "stopped",
+               "reason": "USB link lost during print", "layer": 6, "layers": 10, "z_slicer": 0.8,
+               "x": 12.5, "y": -3.0, "z": 0.84, "tool": 1, "two_tools": False, "temp": 210, "z_offset": 0.04}
+        rec.update(kw)
+        with open(self.w.last_print_path, "w") as fh:
+            json.dump(rec, fh)
+        return rec
+
+    def test_stopped_print_shows_where_and_resume(self):
+        self.write_record()
+        self.w.on_print_done(False, "USB link lost during print")
+        self.assertFalse(self.w.resume_box.isHidden())
+        self.assertIn("layer 6 of 10", self.w.resume_lbl.text())
+        self.assertIn("X 12.5", self.w.resume_lbl.text())
+        self.assertTrue(self.w.resume_btn.isEnabled())
+        warn = [m for k, t, m in self.w.shown if k == "warn"][-1]
+        self.assertIn("layer 6 of 10", warn)
+        self.write_record(state="finished")
+        self.w.show_last_print()
+        self.assertTrue(self.w.resume_box.isHidden())
+        os.remove(self.w.last_print_path)
+
+    def test_resume_button_makes_the_file(self):
+        self.write_record()
+        self.w.show_last_print()
+        calls = []
+
+        def fake_run_tool(script, args, timeout=900):
+            calls.append((script, list(args)))
+            if script == "resume_print.py":
+                shutil.copy(SAMPLE, os.path.join(OUT_T, args[args.index("--name") + 1] + ".x3g"))
+            return 0, "RESULT        : OK", ""
+
+        asked = []
+        self.w.ask_layer = lambda t, m, v, lo, hi: (asked.append((v, lo, hi)), 7)[1]
+        real = d4_qt.run_tool
+        d4_qt.run_tool = fake_run_tool
+        try:
+            self.w.make_resume()
+            self.assertTrue(wait_for(lambda: any(t == "Resume" for k, t, *_ in self.w.shown), 30))
+        finally:
+            d4_qt.run_tool = real
+        self.assertEqual(asked, [(6, 1, 10)])                    # offers the stopped layer, 1 .. 10
+        resume = [a for script, a in calls if script == "resume_print.py"]   # (a background preview
+        self.assertEqual(len(resume), 1)                                     # check may call too)
+        args = resume[0]
+        self.assertEqual(args[args.index("--from-z") + 1], "0.9")   # layer 7
+        self.assertEqual(args[args.index("--layer-no") + 1], "7")
+        out = os.path.join(OUT_T, "T_PRINT_RESUME_L7.x3g")
+        self.assertEqual(self.w.selected_path(), out)
+        self.assertEqual(self.titles("info"), ["Resume"])
+        for _ in range(100):                                     # the preview may still be reading it
+            try:
+                os.remove(out)
+                break
+            except PermissionError:
+                wait_for(lambda: False, 0.1)
+        os.remove(self.w.last_print_path)
+
+    def test_resume_cancelled(self):
+        self.write_record()
+        self.w.ask_layer = lambda *a: None
+        self.w.make_resume()
+        self.assertFalse(os.path.exists(os.path.join(OUT_T, "T_PRINT_RESUME_L6.x3g")))
+        os.remove(self.w.last_print_path)
 
     def test_set_now_during_print(self):
         self.w.printing = True
