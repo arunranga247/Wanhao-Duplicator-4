@@ -14,7 +14,7 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 ![Printer](https://img.shields.io/badge/Printer-Wanhao%20Duplicator%204-34A853)
 ![Firmware](https://img.shields.io/badge/Firmware-Sailfish%207.7-FBBC04)
 ![Slicer](https://img.shields.io/badge/Slicer-PrusaSlicer%202.9.6-EA4335)
-![Version](https://img.shields.io/badge/version-2.0.0-1A73E8)
+![Version](https://img.shields.io/badge/version-2.1.0-1A73E8)
 ![Qt](https://img.shields.io/badge/UI-Qt%206%20(PySide6)-41CD52?logo=qt&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
@@ -54,12 +54,16 @@ Built and tested on the **Wanhao Duplicator 4**. The **Duplicator 4S** and other
 | 📦 **Print any 3D model** | STL, 3MF, OBJ and AMF are sliced by the PrusaSlicer engine with a tuned Duplicator 4 PLA profile: walls, solid top and bottom, infill, brim and optional supports |
 | 🧊 **3D model viewer** | See your model on the Duplicator 4 bed before slicing: drag to turn, right-drag to move, wheel to zoom. Runs on the graphics card (smooth even with 200 000 triangles), with an automatic fallback for PCs without OpenGL |
 | 〰️ **3D print-path preview** | After slicing, the real print moves in 3D (red = right nozzle, blue = left) with a **layer slider** to step through the print layer by layer |
+| 🔴 **Live 3D print view** | While printing, the preview follows the printer: what is on the bed in colour, the last line glowing orange, the rest of the layer as a light plan and a nozzle at its real position. Layers not printed yet are hidden (**👻 Show rest** shows them see-through) |
+| ↻ **Resume a stopped print** | The app saves the layer, height and nozzle position as it prints. After a stop (USB drop, cancel, crash or power cut), **Resume from layer…** makes a file that finishes the object on top of the part still on the bed |
+| 🌡️ **Temperatures for this print** | Choose the bed and nozzle temperature for one print, or change them while it prints with **Set now** |
+| 🎨 **Two colours, two parts** | Extruder **Both (2 parts, 2 colours)**: part 1 on the left nozzle, part 2 on the right, side by side with a small purge tower |
 | ❔ **Help on every setting** | A small **?** next to Layer, Infill, Walls, Supports, Brim, Squish and the rest: hover for a little drawing and a plain explanation |
 | 🔍 **Fit check** | Before printing: does it fit, is it watertight, overhangs, thin walls, narrow gaps, and do assembled parts collide (3D report in the browser) |
 | 🧩 **Built-in demo prints** | Twisted flower vase (spiral "vase mode"), square blocks, two-colour R+L cubes, left-extruder air demo |
 | ✅ **Safety check on every file** | Bed limits, nozzle height, extruder speed, heated-bed and tool-change rules, checked before anything is printed |
 | 🖨️ **Live printer control** | Temperatures with history chart, limit switches, move and home pad, filament load/unload, motor test |
-| 📡 **USB printing** | Progress, time left, current height, filament used and nozzle temperatures, with pause and cancel |
+| 📡 **USB printing** | Progress, layer (e.g. 136 / 232), time left, current height, filament used and nozzle temperatures, with pause and cancel |
 | ⛔ **Emergency stop** | One click (or **Esc**) stops all motion and switches every heater off |
 | 🎨 **Modern interface** | Qt 6 window, Google Material colours, **light / dark theme switches instantly**, one clear font everywhere, resizable |
 | 💾 **Remembers your settings** | Tab, temperatures, per-object settings, window size and last file |
@@ -115,7 +119,7 @@ flowchart LR
 
 ### 1. Get the project
 
-**Easiest:** download **Duplicator4Studio.exe** (v2.0.0) from the
+**Easiest:** download **Duplicator4Studio.exe** (v2.1.0) from the
 [latest release](https://github.com/arunranga247/Wanhao-Duplicator-4/releases/latest) and extract it.
 Put it in a folder of its own and add the PrusaSlicer engine next to it (step 2).
 
@@ -182,7 +186,7 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 ## 🎯 Your first print
 
 1. Prepare the bed: clean it, then apply a thin layer of **glue stick** (or blue painter's tape).
-2. Load PLA into the left extruder: **Printer → ⬇ Load** (Left).
+2. Load PLA into the left extruder: **Printer → ↓ Load** (Left).
 3. **Prepare → 📦 Your 3D model → 📂 Browse…** → `models\test_nut.stl` → **⚙ Generate**.
 4. **📂 Open in Print tab → ▶ Print selected file** → tick the checklist.
 5. Watch the first layer. The print takes about 14 minutes plus heat-up.
@@ -193,9 +197,10 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 
 ### Printer tab
 - **Temperatures:** Set/Off per heater, the *PLA: both 210 °C* preset and *All heaters off*. Bars fill toward the target, and a 5-minute chart is shown below.
-- **Limit switches:** X / Y / Z badges with **● PRESSED** / **○ open**, plus the current position.
+- **Bad bed sensor:** tick *Bad bed sensor: switch bed off after* (1 - 5 min) to heat the bed on a timer when its sensor is broken; the bed switches off by itself when the time is up.
+- **Limit switches:** X / Y / Z badges with **● PRESSED** / **○ open**, plus the current position (X / Y / Z in mm) and how much filament each extruder has moved.
 - **Move:** arrows move the head (◄ ► ▲ ▼), **⌂ Home XY** is in the centre, the **Bed (Z)** column moves the bed (▲ Up = toward the nozzles), and the step is 0.1 / 1 / 10 / 50 mm.
-- **Extruders:** Retract, Extrude, ⬇ Load and ⬆ Unload per extruder; **■ Stop filament** stops a load or unload.
+- **Extruders:** Retract, Extrude, ↓ Load and ↑ Unload per extruder; **■ Stop filament** stops a load or unload.
 
 ### Prepare tab
 - **1. Choose an object:** your own 3D model or a built-in demo. The small **i** button explains the object.
@@ -203,27 +208,40 @@ The result is written to `output\selftest.txt` in the app's data folder. The las
 - **Preview:** up to three views, switched with the buttons above it:
   **🧊 3D model** (before slicing), **〰 Print paths** (after slicing: the real moves in 3D, with a **layer slider**) and **🖼 Overview** (bed top view + facts).
   Drag to turn, right-drag to move, mouse wheel to zoom, double-click to reset the view.
-- **🔍 Fit check / 🧩 Assembly…:** checks a model (or several parts that fit together) before you print and opens a 3D report.
+- **Check first: 🔍 Fit check / 🧩 Assembly…** (under Generate, for 3D models): checks a model (or several parts that fit together) before you print and opens a 3D report.
 
 #### 3D model settings
 
 | Setting | Meaning | Default |
 |---|---|---|
-| Layer (mm) | 0.1 fine · 0.2 normal · 0.3 draft | 0.2 |
+| Layer height (mm) | 0.1 fine · 0.2 normal · 0.3 draft | 0.2 |
 | Infill (%) | inside fill density | 20 |
-| Walls | number of outlines | 3 |
-| Supports 0/1/2 | 0 = none · 1 = tree (organic) supports, the standard · 2 = straight pillars | 0 |
+| Walls (lines) | number of outlines | 3 |
+| Supports | Off · **Tree (best)**, organic supports · Straight pillars | Off |
 | Brim (mm) | first-layer rim for grip | 5 |
 | Scale (%) | resize the model | 100 |
-| Nozzle °C / 1st layer °C | PLA temperatures | 210 / 220 |
-| Squish (mm) | first layer closer (negative) or further (positive) | −0.05 |
-| Colour Z (mm) | above this height the other extruder prints (two colours, 0 = off) | 0 |
-| Fast 0/1 | about 40 % quicker for simple parts | 0 |
-| Extruder | Left or Right | Left |
+| Nozzle (°C) / First layer (°C) | PLA temperatures | 210 / 220 |
+| 1st-layer squish | first layer closer (negative) or further (positive), in mm | −0.05 mm |
+| Colour change Z | above this height the other extruder prints (two colours; *off* = one colour) | off |
+| Speed | tick **Fast (simple parts)** for about 40 % quicker prints | not ticked |
+| Extruder | Left, Right, or **Both (2 parts, 2 colours)** for your own 3D models | Left |
 
 ### Print tab
 The file library shows each file's print time, filament, Z-homing type and safety status. **▶ Print selected
 file** opens a checklist, then shows live progress. Keep the app open and the PC awake while printing.
+
+- **This print: Bed / Nozzle:** the temperatures for this one print (*as in file* keeps the file's own). While
+  printing, change a value and press **Set now**. The nozzle setting changes only the printing temperature,
+  never a waiting nozzle's standby or the switch-off at the end; a bed value is never higher than 70 °C.
+- **Print job:** progress, **Layer N / total**, time left, height, filament and nozzle temperatures.
+- **Live 3D view:** with the printing file selected, the preview shows **● LIVE**: the printed part in colour,
+  the last line glowing orange, the rest of the current layer in light blue and a yellow nozzle where the
+  printer really is. **👻 Show rest** adds the layers still to print, see-through. Turn and zoom as usual.
+- **Resume a stopped print:** if a print stops, the Print tab says where (*stopped at layer 136 of 232,
+  Z 13.80 mm, nozzle X … Y …*), also after restarting the app. Leave the part on the bed, press
+  **↻ Resume from layer…** and choose the layer: the stopped layer may be half done, so if it looks complete,
+  choose the next one. The new file (e.g. `BUST_RESUME_L136.x3g`) homes away from the part, lifts the head
+  above it, primes a line at the front edge and prints from that layer to the top.
 
 > **Tip:** press **Ctrl + Shift + A** for *About*. The theme (System / Light / Dark) is in the bottom-right corner
 > and switches instantly. Settings are stored in `tools\d4_settings.json`; delete that file to reset them.
@@ -236,7 +254,7 @@ This Duplicator 4 was analysed over USB. Its faults and firmware quirks are hand
 
 | Finding | Solution in Duplicator 4 Studio |
 |---|---|
-| Heated-bed thermistor wire has failed before (then reads below room temperature) | Bed limited to 70 °C; bed heating (by hand or from a file) is refused while the sensor reads below 15 °C; the watchdog switches the bed off on over-temperature, sudden jumps or no rise |
+| Heated-bed thermistor wire has failed before (then reads below room temperature) | Bed limited to 70 °C; bed heating (by hand or from a file) is refused while the sensor reads below 15 °C, unless the bed timer is on (heats at most 5 min, then off); a file that wants the bed can be printed with the bed off instead; the watchdog switches the bed off on over-temperature, sudden jumps or no rise |
 | Fast Z homing caused controller resets | Slow Z homing (5 mm/s, 40 s limit) with heaters off; heat-up only after homing succeeds |
 | Stored T1 (left nozzle) offset is wrong (~228 mm) | The firmware is never switched to T1; the 33 mm nozzle spacing is applied in software |
 | Extruder direction inverted (negative steps feed filament) | One global direction constant used by every tool |
@@ -250,7 +268,8 @@ This Duplicator 4 was analysed over USB. Its faults and firmware quirks are hand
 
 - **⛔ Emergency stop** (button or **Esc**): halts motion, clears the printer's buffer and switches all heaters off.
 - **Heater watchdog:** switches all heaters off if a sensor reads implausibly low, a heater does not warm up in time, or the bed overheats or its reading jumps.
-- **Bed heating:** maximum 70 °C, *Allow bed heating* switch, and refused automatically while the bed sensor reads below 15 °C (broken wire) - when you set it by hand **and** when a file wants to heat the bed.
+- **Bed heating:** maximum 70 °C, *Allow bed heating* switch, and refused automatically while the bed sensor reads below 15 °C (broken wire) - when you set it by hand **and** when a file wants to heat the bed. With a broken sensor, the **bed timer** lets it heat for at most 5 minutes, then switches it off (also when the app is closed while the timer runs).
+- **Resume files:** the head is lifted above the part already on the bed before it moves across, so the nozzle never sweeps through a tall part.
 - **No accidental changes:** number boxes ignore the mouse wheel until clicked, so scrolling the page never changes a temperature.
 - **Safety checker:** files that leave the bed, dig into it, over-speed an axis, heat the bed or use the faulty T1 offset are refused.
 - **Pre-print checklist** before every job.
@@ -272,15 +291,18 @@ Wanhao-Duplicator-4/
 ├─ output/                    print files (.x3g / .gcode), logs, previews (not in git)
 ├─ designs/                   your own object design scripts (not in git, not in the app)
 ├─ docs/images/               screenshots
+├─ graphify-out/              code map: open graph.html in a browser (GRAPH_REPORT.md = summary)
 └─ tools/
    ├─ d4_qt.py                application window and tabs (Qt), 3D viewers
    ├─ d4_core.py              settings, help texts and every safety rule (tested)
    ├─ d4_gui.py               old Tk window (kept for reference, not in the .exe)
-   ├─ d4_worker.py            USB connection thread, heater watchdog
+   ├─ d4_worker.py            USB connection thread, heater watchdog, layer tracking (last_print.json)
    ├─ model_preview.py        3D model loading and CPU picture renderer
    ├─ fit_check.py            fit check + 3D report
    ├─ level_bed.py            bed levelling helper
-   ├─ resume_print.py         continue a stopped print from a height
+   ├─ resume_print.py         continue a stopped print from a layer (used by Resume from layer…)
+   ├─ two_part.py             two parts in two colours, side by side with a purge tower
+   ├─ port_gcode.py           convert G-code from other slicers for this printer
    ├─ d4_paths.py             folders, engine lookup, tool runner
    ├─ s3g_link.py             s3g/x3g protocol and printer constants
    ├─ slice_model.py          3D model → PrusaSlicer → x3g
@@ -302,8 +324,8 @@ Wanhao-Duplicator-4/
 ## 🔨 Building the executable
 
 ```powershell
-python -m unittest discover -s tools\tests   # 110 tests, about 3 minutes, no printer needed
-python tools\build_exe.py                     # writes Duplicator4Studio.exe (about 63 MB)
+python -m unittest discover -s tools\tests   # 150+ tests, about 3 minutes, no printer needed
+python tools\build_exe.py                     # writes Duplicator4Studio.exe (about 65 MB)
 .\Duplicator4Studio.exe --selftest            # must end with OVERALL: PASS
 ```
 
@@ -318,7 +340,9 @@ The tests use a pretend printer and temporary folders, so they never move your p
 ```powershell
 cd tools
 python slice_model.py --model ..\models\test_nut.stl --name NUT --only left
+python slice_model.py --model ..\models\test_nut.stl --name NUT_SMOOTH --only left --iron 1 --brim 0   # ironed top
 python check_x3g.py ..\output\NUT.x3g
+python resume_print.py --gcode ..\output\NUT.gcode --from-z 3.1 --z-offset -0.05   # finish a stopped print
 python render_preview.py ..\output\NUT.x3g
 python stream_x3g.py ..\output\NUT.x3g --port COM30     # close the app first
 python check_nozzle.py --tool right
