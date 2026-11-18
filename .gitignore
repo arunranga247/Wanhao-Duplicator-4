@@ -27,3 +27,9 @@ designs/
 
 # copy of the licence texts the .exe makes for its About box (originals: LICENSE, licenses/)
 licences/
+
+# graphify code map: keep the map (graph.html / graph.json / GRAPH_REPORT.md), not its cache or local files
+graphify-out/cache/
+graphify-out/.graphify_*
+graphify-out/manifest.json
+graphify-out/cost.json
