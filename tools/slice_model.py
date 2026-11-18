@@ -32,7 +32,13 @@ ap.add_argument("--infill", type=float, default=20)
 ap.add_argument("--walls", type=int, default=3)
 ap.add_argument("--supports", type=float, default=0,
                 help="0 = off, 1 = tree supports (standard, best for figures), 2 = straight pillars")
+ap.add_argument("--support-angle", type=float, default=0,
+                help="supports under surfaces flatter than this many degrees (0 = slicer decides; "
+                     "50-55 for balls and domes, whose lower half the slicer otherwise leaves unsupported)")
 ap.add_argument("--brim", type=float, default=5)
+ap.add_argument("--brim-gap", type=float, default=0,
+                help="mm between the brim and the part (0 = joined; 0.1 = brim only just touches, "
+                     "peels off clean without leaving a rough lip on the bottom edge)")
 ap.add_argument("--scale", type=float, default=100, help="percent")
 ap.add_argument("--temp", type=int, default=210)
 ap.add_argument("--first-temp", type=int, default=220)
@@ -45,6 +51,9 @@ ap.add_argument("--bed", type=int, default=60, help="heated bed C (PLA 60, 0 = o
 ap.add_argument("--fine", type=int, default=0,
                 help="1 = best finish: 0.12 mm layers, slow outer walls, ironed top surfaces, seam at "
                      "the back (about 1.7x longer)")
+ap.add_argument("--iron", type=int, default=0,
+                help="1 = iron the flat top surfaces: the hot nozzle passes over them again so the "
+                     "printed lines melt flat (smooth top, about 10-20 %% longer)")
 ap.add_argument("--tilt-x", type=float, default=0.0,
                 help="bed tilt fix, mm per 100 mm to the right (+ = right side too tight, - = gap too big)")
 ap.add_argument("--min-layer-time", type=float, default=0,
@@ -88,6 +97,7 @@ with tempfile.TemporaryDirectory() as tmp:
            "--fill-density", "%g%%" % a.infill,
            "--perimeters", "%d" % a.walls,
            "--brim-width", "%g" % a.brim,
+           "--brim-separation", "%g" % max(0.0, min(1.0, a.brim_gap)),
            "--output", gcode]
     lay = None
     if model2:
@@ -108,6 +118,8 @@ with tempfile.TemporaryDirectory() as tmp:
             # 1 = tree (organic) supports - the standard: thin branches touch the model only where
             # needed, less plastic, cleaner surfaces, snap off easily
             cmd += ["--support-material-style", "organic"]
+        if a.support_angle > 0:
+            cmd += ["--support-material-threshold", "%d" % max(10, min(89, round(a.support_angle)))]
         # 2 = classic straight pillars (only for big flat overhangs)
     if a.fast:
         # ~35-45 % quicker; the volumetric cap keeps the hot end from running out of melt
@@ -118,6 +130,10 @@ with tempfile.TemporaryDirectory() as tmp:
         cmd += ["--avoid-crossing-perimeters"]
     if a.min_layer_time > 0:
         cmd += ["--slowdown-below-layer-time", "%g" % a.min_layer_time, "--min-print-speed", "5"]
+    if a.iron and not a.fine:
+        # only the top surfaces: monotonic lines, then a slow, light ironing pass
+        cmd += ["--ironing", "--ironing-type", "top", "--ironing-flowrate", "15%",
+                "--ironing-speed", "30", "--top-fill-pattern", "monotonic"]
     if a.fine:
         # smooth walls (slow outer line), ironed flat tops, seam hidden at the back
         cmd += ["--external-perimeter-speed", "15", "--perimeter-speed", "25",

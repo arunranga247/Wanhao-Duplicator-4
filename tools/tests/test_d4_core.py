@@ -40,6 +40,19 @@ class Bed(unittest.TestCase):
         for reading in (1, 5, 14.9):
             self.assertFalse(c.bed_heat_decision(60, True, reading)[0], reading)
 
+    def test_bad_sensor_with_timer_allows(self):        # the toggle: heats, the timer switches it off
+        ok, v, title, msg = c.bed_heat_decision(60, True, 1, timer_min=3)
+        self.assertEqual((ok, v), (True, 60))
+        self.assertIn("3 min", msg)
+        self.assertEqual(c.bed_heat_decision(90, True, 1, timer_min=3)[:2], (True, c.BED_MAX_C))
+        self.assertFalse(c.bed_heat_decision(60, False, 1, timer_min=3)[0])   # master switch still wins
+
+    def test_print_gate_with_timer(self):
+        st = {"bed": 60, "t1_change": False, "z_home": "slow"}
+        self.assertEqual(c.print_gate(st, True, "", True, True, 1), [("bed_off", "Bed sensor fault",
+                         c.print_gate(st, True, "", True, True, 1)[0][2])])
+        self.assertEqual(c.print_gate(st, True, "", True, True, 1, bed_timer_min=3), [])
+
     def test_plausible_sensor_allows(self):
         self.assertEqual(c.bed_heat_decision(60, True, 15)[:2], (True, 60))
         self.assertEqual(c.bed_heat_decision(60, True, 25)[:2], (True, 60))
@@ -100,16 +113,16 @@ class PrintGate(unittest.TestCase):
         self.assertEqual(self.kinds(check_ok=False), ["block"])
 
     def test_bed_file_switch_off(self):
-        self.assertEqual(self.kinds(st=st(bed=60), bed_allowed=False), ["block"])
+        self.assertEqual(self.kinds(st=st(bed=60), bed_allowed=False), ["bed_off"])
 
     def test_bed_file_broken_sensor(self):            # new: was not checked before printing
-        self.assertEqual(self.kinds(st=st(bed=60), bed_now=4), ["block"])
+        self.assertEqual(self.kinds(st=st(bed=60), bed_now=4), ["bed_off"])
 
     def test_bed_file_ok(self):
         self.assertEqual(self.kinds(st=st(bed=60)), [])
 
     def test_bed_file_too_hot(self):
-        self.assertEqual(self.kinds(st=st(bed=90)), ["block"])
+        self.assertEqual(self.kinds(st=st(bed=90)), ["bed_off"])
 
     def test_no_bed_ignores_sensor(self):
         self.assertEqual(self.kinds(st=st(bed=0), bed_now=2, bed_allowed=False), [])

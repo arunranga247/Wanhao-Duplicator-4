@@ -30,7 +30,7 @@ import traceback
 import webbrowser
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QPointF, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QKeySequence, QMatrix4x4, QPainter, QPainterPath,
                            QPalette, QPen, QPixmap, QShortcut, QSurfaceFormat, QVector3D)
 from PySide6.QtOpenGL import QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram
@@ -233,6 +233,39 @@ class NoWheelDouble(QDoubleSpinBox):
             super().wheelEvent(e)
         else:
             e.ignore()
+
+
+class ChoiceBox(QComboBox):
+    """A setting with a few named choices (index = the number the slicer gets)."""
+
+    def __init__(self, choices, value=0):
+        super().__init__()
+        self.addItems(choices)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setValue(value)
+
+    def value(self):
+        return float(self.currentIndex())
+
+    def setValue(self, v):
+        self.setCurrentIndex(max(0, min(self.count() - 1, int(round(float(v))))))
+
+    def wheelEvent(self, e):
+        e.ignore()                                     # never change a setting while scrolling the page
+
+
+class ToggleBox(QCheckBox):
+    """An on/off setting (1 / 0)."""
+
+    def __init__(self, text, value=0):
+        super().__init__(text)
+        self.setValue(value)
+
+    def value(self):
+        return 1.0 if self.isChecked() else 0.0
+
+    def setValue(self, v):
+        self.setChecked(float(v) >= 0.5)
 
 
 class NoWheelCombo(QComboBox):
@@ -1354,6 +1387,20 @@ class MainWindow(QMainWindow):
                                "%d °C (broken wire)." % core.BED_MIN_PLAUSIBLE_C)
         self.bed_ok.setChecked(True)
         body.addWidget(self.bed_ok)
+        trow = QHBoxLayout()                              # bad bed sensor: heat on a timer
+        self.bed_timer_on = QCheckBox("Bad bed sensor: switch bed off after")
+        self.bed_timer_on.setToolTip(
+            "For a bed sensor that reads 0-15 °C (broken wire). The printer cannot see the bed "
+            "temperature and heats at FULL power, so the app switches the bed OFF after these minutes. "
+            "Check the bed with a temperature gun. Repair the wire for normal bed heating.")
+        self.bed_timer_min = NoWheelSpin(1, core.BED_TIMER_MAX_MIN, 1, 3)
+        self.bed_timer_min.setSuffix(" min")
+        trow.addWidget(self.bed_timer_on)
+        trow.addWidget(self.bed_timer_min)
+        trow.addStretch(1)
+        body.addLayout(trow)
+        self.bed_timer_on.toggled.connect(self._bed_timer_changed)
+        self.bed_timer_min.valueChanged.connect(self._bed_timer_changed)
         row = QHBoxLayout()
         row.addWidget(button("🔥 PLA: both 210 °C", lambda: self.preset(210)))
         row.addWidget(button("❄ All heaters off", lambda: self.worker.submit("heaters_off")))
@@ -1372,9 +1419,9 @@ class MainWindow(QMainWindow):
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         self.sw = {}
-        for i, (bit, letter, name, where) in enumerate(((1, "X", "X axis", "→|  head at the right end"),
-                                                        (3, "Y", "Y axis", "↑|  head at the back"),
-                                                        (4, "Z", "Z axis", "↑  bed at the top"))):
+        for i, (bit, letter, name, where) in enumerate(((1, "X", "X axis", "switch: head at the right end"),
+                                                        (3, "Y", "Y axis", "switch: head at the back"),
+                                                        (4, "Z", "Z axis", "switch: bed at the top"))):
             d = Dot(None, letter, 28)
             grid.addWidget(d, i, 0)
             info = QVBoxLayout()
@@ -1390,8 +1437,11 @@ class MainWindow(QMainWindow):
         self.sw_warn = label("", tone="warn")
         body.addWidget(self.sw_warn)
         body.addWidget(separator())
-        self.pos_lbl = label("X ---   Y ---   Z ---", name="mono")
+        body.addWidget(label("Position", tone="dim"))
+        self.pos_lbl = label("X ---   Y ---   Z ---", name="value")
         body.addWidget(self.pos_lbl)
+        self.ext_lbl = label("Filament moved:  —", tone="dim")
+        body.addWidget(self.ext_lbl)
         self.homed_lbl = label("Not homed", tone="dim")
         body.addWidget(self.homed_lbl)
         body.addStretch(1)
@@ -1475,8 +1525,8 @@ class MainWindow(QMainWindow):
             g.addWidget(label(name), i, 0)
             g.addWidget(self._ctl(button("Retract", lambda _=False, t=tool: self.extrude(t, -1))), i, 1)
             g.addWidget(self._ctl(button("Extrude", lambda _=False, t=tool: self.extrude(t, +1))), i, 2)
-            g.addWidget(self._ctl(button("⬇ Load", lambda _=False, t=tool: self.filament(t, "load"))), i, 3)
-            g.addWidget(self._ctl(button("⬆ Unload", lambda _=False, t=tool: self.filament(t, "unload"))), i, 4)
+            g.addWidget(self._ctl(button("↓ Load", lambda _=False, t=tool: self.filament(t, "load"))), i, 3)
+            g.addWidget(self._ctl(button("↑ Unload", lambda _=False, t=tool: self.filament(t, "unload"))), i, 4)
         body.addLayout(g)
         row = QHBoxLayout()
         self.keep_hot = QCheckBox("Keep nozzle hot afterwards")
@@ -1537,9 +1587,11 @@ class MainWindow(QMainWindow):
         cv = QVBoxLayout(col)
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(12)
-        cv.addWidget(sa, 1)
-        col.setMinimumWidth(510)
-        col.setMaximumWidth(580)
+        sa.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        sa.sizeHint = lambda: left.sizeHint() + QSize(2, 2)
+        cv.addWidget(sa, 10)
+        col.setMinimumWidth(660)
+        col.setMaximumWidth(700)
         o, b = card("3. Generate")                        # ... the Generate button never does
         row = QHBoxLayout()
         row.addWidget(label("File name"))
@@ -1551,7 +1603,19 @@ class MainWindow(QMainWindow):
         self.gen_btn = button("⚙  Generate", self.generate, kind="filled")
         row.addWidget(self.gen_btn)
         b.addLayout(row)
+        self.check_row = QWidget()                        # check a 3D model before / instead of printing
+        cr = QHBoxLayout(self.check_row)
+        cr.setContentsMargins(0, 2, 0, 0)
+        cr.setSpacing(6)
+        cr.addWidget(label("Check first:", tone="dim"))
+        cr.addWidget(button("🔍 Fit check", lambda: self.fit_check(), kind="tonal",
+                            tip="Will it print well? 3-D report: size, overhangs, thin walls, narrow gaps"))
+        cr.addWidget(button("🧩 Assembly…", self.fit_check_assembly, kind="tonal",
+                            tip="Do several parts fit together? (box + lid + board ...)"))
+        cr.addStretch(1)
+        b.addWidget(self.check_row)
         cv.addWidget(o)
+        cv.addStretch(1)                                  # spare height below, not between the cards
         h.addWidget(col)
         o, b = card("Preview")
         self.model_area = ModelArea()
@@ -1611,13 +1675,7 @@ class MainWindow(QMainWindow):
             g.addWidget(self.model2_row[0], 1, 0)
             g.addWidget(self.model2_edit, 1, 1, 1, 3)
             g.addWidget(b2, 1, 4)
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            row.addWidget(button("🔍 Fit check", lambda: self.fit_check(), kind="tonal"))
-            row.addWidget(button("🧩 Assembly…", self.fit_check_assembly, kind="tonal"))
-            row.addStretch(1)
-            g.addLayout(row, 2, 0, 1, 4)
-            r0 = 3
+            r0 = 2
         params = obj["params"]
         two = len(params) > 5
         for i, (flag, lab, default, lo, hi, step) in enumerate(params):
@@ -1626,7 +1684,18 @@ class MainWindow(QMainWindow):
             dec = 0 if float(step).is_integer() and float(lo).is_integer() and float(default).is_integer() \
                 else max(len(("%g" % step).split(".")[-1]) if "." in "%g" % step else 0, 1)
             v = core.parse_number(saved.get(flag, default))
-            sp = NoWheelDouble(lo, hi, step, default if v is None else v, dec)
+            v = default if v is None else v
+            if flag == "supports":                        # named choices instead of 0 / 1 / 2
+                sp = ChoiceBox(["Off", "Tree (best)", "Straight pillars"], v)
+            elif flag == "fast":
+                sp = ToggleBox("Fast (simple parts)", v)
+            else:
+                sp = NoWheelDouble(lo, hi, step, v, dec)
+                if flag == "z-offset":
+                    sp.setSuffix(" mm")
+                elif flag == "color-z":
+                    sp.setSuffix(" mm")
+                    sp.setSpecialValueText("off")
             g.addWidget(sp, r, c + 1)
             if not two:
                 g.addWidget(label("%g … %g" % (lo, hi), tone="dim"), r, 2)
@@ -1655,6 +1724,7 @@ class MainWindow(QMainWindow):
         self.ext_group.buttonToggled.connect(lambda *_: self._extruder_changed())
         self._extruder_changed(preview=False)
         g.setColumnStretch(4, 1)                          # spare width goes to the right edge, not a box
+        self.check_row.setVisible(bool(obj.get("model")))
         self.gen_name.setEnabled(not obj.get("fixed_name"))
         self.gen_name.setText(saved.get("_name", obj["name"]))
         if obj.get("fixed_name"):
@@ -1957,7 +2027,7 @@ class MainWindow(QMainWindow):
         # same preview box as the Prepare tab: the print paths in 3D (turn / zoom / layer slider),
         # the overview picture one click away
         self.file_area = ModelArea()
-        self.file_area.setMinimumHeight(300)
+        self.file_area.setMinimumHeight(220)
         self.file_area.msg.setText("Select a file in the list to see it here")
         self.file_preview = self.file_area.image           # the overview picture
         b.addWidget(self.file_area, 1)
@@ -1970,6 +2040,30 @@ class MainWindow(QMainWindow):
         row.addWidget(self._ctl(button("⏸ Pause / Resume", lambda: self.worker.submit("pause"))), 1)
         row.addWidget(self._ctl(button("✖ Cancel", self.cancel_print)), 1)
         b.addLayout(row)
+        brow = QHBoxLayout()                              # bed temperature chosen for THIS print
+        brow.addWidget(label("This print:", tone="dim"))
+        brow.addSpacing(6)
+        brow.addWidget(self._label("Bed", "_print_bed"))
+        self.print_bed = NoWheelSpin(-1, core.BED_MAX_C, 5, -1)
+        self.print_bed.setSpecialValueText("as in file")
+        self.print_bed.setSuffix(" °C")
+        self.print_bed.setMinimumWidth(110)
+        brow.addWidget(self.print_bed)
+        self.print_bed_set = self._ctl(button("Set now", self.set_print_bed,
+                                              tip="Change the bed temperature of the running print"))
+        brow.addWidget(self.print_bed_set)
+        brow.addSpacing(16)
+        brow.addWidget(self._label("Nozzle", "_print_nozzle"))
+        self.print_nozzle = NoWheelSpin(175, core.NOZZLE_MAX_C, 5, 175)     # 175 = "as in file"
+        self.print_nozzle.setSpecialValueText("as in file")
+        self.print_nozzle.setSuffix(" °C")
+        self.print_nozzle.setMinimumWidth(110)
+        brow.addWidget(self.print_nozzle)
+        self.print_nozzle_set = self._ctl(button("Set now", self.set_print_nozzle,
+                                                 tip="Change the nozzle temperature of the running print"))
+        brow.addWidget(self.print_nozzle_set)
+        brow.addStretch(1)
+        b.addLayout(brow)
         self.job_name = label("No print running", name="jobTitleSmall", wrap=True)
         b.addWidget(self.job_name)
         self.prog = QProgressBar()
@@ -1986,10 +2080,12 @@ class MainWindow(QMainWindow):
             cell.addWidget(label(lab, tone="dim"))
             v = label("—", name="value")
             cell.addWidget(v)
-            grid.addLayout(cell, i // 3, i % 3)
+            grid.addLayout(cell, 0, i)                    # one row of 6: the card stays short
             self.job_vals[k] = v
         b.addLayout(grid)
-        left.addWidget(o, 0)
+        # top of the RIGHT column, above the preview: on a laptop screen the left column (file list +
+        # file info) has no height to spare, and a squeezed job card cut off its numbers
+        right.insertWidget(0, o, 0)
         return page
 
     # ---- library ---------------------------------------------------------------------------
@@ -2083,11 +2179,16 @@ class MainWindow(QMainWindow):
                 self._run_checker(path)
         except Exception as e:                                 # noqa: BLE001
             self.events.put(("log", "Preview/check failed for %s: %s" % (os.path.basename(path), e)))
+        if not os.path.exists(path):                           # deleted meanwhile: nothing to show
+            return
         if need_paths:
             try:
                 self._paths_cache[path] = (os.path.getmtime(path), Toolpath(path))
             except Exception:                                  # noqa: BLE001 - the picture still works
-                self._paths_cache[path] = (os.path.getmtime(path), None)
+                try:
+                    self._paths_cache[path] = (os.path.getmtime(path), None)
+                except OSError:                                # deleted while being read
+                    return
         self.events.put(("file_ready", path, prev))
 
     def on_file_ready(self, path, prev):
@@ -2120,10 +2221,18 @@ class MainWindow(QMainWindow):
         if self.ask("Delete", "Delete %s ?" % os.path.basename(p)):
             for f in (p, os.path.splitext(p)[0] + ".gcode",
                       os.path.join(PREV, os.path.splitext(os.path.basename(p))[0] + ".png")):
-                try:
-                    os.remove(f)
-                except OSError:
-                    pass
+                for _ in range(20):                       # Windows: the preview / safety-check thread
+                    try:                                  # may still be reading the file - retry ~2 s
+                        os.remove(f)
+                        break
+                    except FileNotFoundError:
+                        break
+                    except OSError:
+                        QApplication.processEvents()
+                        time.sleep(0.1)
+            if os.path.exists(p):
+                self.warn("Delete", "%s is still in use and was not deleted. Try again in a moment."
+                          % os.path.basename(p))
             self._paths_cache.pop(p, None)
             self.file_area.show_message("Select a file in the list to see it here")
             self.refresh_library()
@@ -2146,11 +2255,25 @@ class MainWindow(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
             cc = self._check_cache.get(path)
+        bed = self.print_bed_choice()                     # None = as in the file
+        if bed is not None:
+            st = dict(st, bed=bed)                        # gate + checklist see the bed really used
+        timer = self.bed_timer()
+        if (bed is None and timer and st.get("bed")
+                and (self._last_temps.get("bed") or 0) < core.BED_MIN_PLAUSIBLE_C):
+            bed = min(int(st["bed"]), core.BED_MAX_C)     # the file's "wait for the bed" would never end
         for kind, title, msg in core.print_gate(st, cc[1], cc[2], self.connected, self.bed_ok.isChecked(),
-                                                self._last_temps.get("bed")):
+                                                self._last_temps.get("bed"), timer):
             if kind == "block":
                 self.error(title, msg)
                 return
+            if kind == "bed_off":                         # bed problem -> offer the print with the bed OFF
+                if not self.ask(title, msg + "\n\nPrint this file with the bed OFF instead?\n"
+                                             "(The print starts without waiting for the bed - "
+                                             "use glue stick or tape.)"):
+                    return
+                bed, st = 0, dict(st, bed=0)
+                continue
             if not self.ask(title, msg):
                 return
         if not self.checklist(path, st):
@@ -2161,8 +2284,57 @@ class MainWindow(QMainWindow):
         self.job_name.setText("⏳ Homing, then heating - " + self.job_file)
         for v in self.job_vals.values():
             v.setText("—")
-        self.worker.submit("print", path)
-        self.log("Print started: %s" % self.job_file, "ok")
+        nozzle = self.print_nozzle_choice()
+        self.worker.submit("print", path, bed, nozzle)
+        self.log("Print started: %s%s%s" % (self.job_file, "" if bed is None else
+                                            "  (bed %d °C, starts without waiting for the bed)" % bed,
+                                            "" if nozzle is None else "  (nozzle %d °C)" % nozzle), "ok")
+
+    def bed_timer(self):
+        """Minutes of the bad-sensor bed timer (0 = off)."""
+        return self.bed_timer_min.value() if self.bed_timer_on.isChecked() else 0
+
+    def _bed_timer_changed(self, *_):
+        self.worker.submit("bed_timer", self.bed_timer())
+
+    def print_nozzle_choice(self):
+        v = self.print_nozzle.value()
+        return None if v < 180 else int(v)
+
+    def set_print_nozzle(self):
+        """Change the nozzle of the running print now (both nozzles that are printing)."""
+        v = self.print_nozzle_choice()
+        if v is None:
+            self.info("Nozzle", "Choose a temperature first (180 - %d °C)." % core.NOZZLE_MAX_C)
+            return
+        if not self.printing:
+            self.info("Nozzle", "This is used when you press 'Print selected file'. During a print, "
+                                "'Set now' changes the nozzle at once.")
+            return
+        self.worker.submit("set_nozzle", v)
+        self.log("Nozzle for this print -> %d °C" % v)
+
+    def print_bed_choice(self):
+        v = self.print_bed.value()
+        return None if v < 0 else int(v)
+
+    def set_print_bed(self):
+        """Change the bed of the running print now (the file's own 'wait for the bed' is skipped)."""
+        v = self.print_bed_choice()
+        if v is None:
+            self.info("Bed", "Choose a temperature first (0 = bed off).")
+            return
+        if not self.printing:
+            self.info("Bed", "This is used when you press 'Print selected file'. During a print, "
+                             "'Set now' changes the bed at once.")
+            return
+        ok, val, title, msg = core.bed_heat_decision(v, self.bed_ok.isChecked(), self._last_temps.get("bed"),
+                                                     self.bed_timer())
+        if not ok:
+            self.warn(title, msg)
+            return
+        self.worker.submit("set_bed", val)
+        self.log("Bed for this print -> %d °C" % val)
 
     def cancel_print(self):
         if self.printing and self.ask("Cancel print", "Stop the print now? Motion stops and heaters switch off."):
@@ -2231,7 +2403,8 @@ class MainWindow(QMainWindow):
     def set_heater(self, key, value=None):
         c = self.t_entry[key].value() if value is None else value
         if key == "bed":
-            ok, v, title, msg = core.bed_heat_decision(c, self.bed_ok.isChecked(), self._last_temps.get("bed"))
+            ok, v, title, msg = core.bed_heat_decision(c, self.bed_ok.isChecked(), self._last_temps.get("bed"),
+                                                       self.bed_timer())
             if not ok:
                 self.warn(title, msg)
                 return
@@ -2395,8 +2568,9 @@ class MainWindow(QMainWindow):
                              if len(self.es_changes) > core.SWITCH_FLUTTER_N else "")
         p = s["pos"]
         self._last_pos = p
-        self.pos_lbl.setText("X %.2f   Y %.2f   Z %.2f\nRight ext %.1f   Left ext %.1f  (mm)" % tuple(p))
-        self.homed_lbl.setText("Homed" if s["homed"] else "Not homed - positions relative to power-on")
+        self.pos_lbl.setText("X %.2f    Y %.2f    Z %.2f  mm" % tuple(p[:3]))
+        self.ext_lbl.setText("Filament moved:  right %.1f mm  ·  left %.1f mm" % tuple(p[3:5]))
+        self.homed_lbl.setText("Homed" if s["homed"] else "Not homed: positions count from power-on")
         set_tone(self.homed_lbl, "ok" if s["homed"] else "dim")
         text, bad = core.board_text(s["board"], s3g.BOARD_FLAGS)
         self.board_lbl.setText(text)
@@ -2488,6 +2662,10 @@ class MainWindow(QMainWindow):
             "move_mm": str(self.e_amt.value()),
             "load_temp": str(self.fil_temp.value()),
             "keep_hot": self.keep_hot.isChecked(),
+            "bed_timer_on": self.bed_timer_on.isChecked(),
+            "bed_timer_min": self.bed_timer_min.value(),
+            "print_bed": self.print_bed.value(),
+            "print_nozzle": self.print_nozzle.value(),
             "object": self.obj_box.currentText(),
             "obj_params": self._obj_params,
             "last_file": self.selected_path() or self.ui.get("last_file"),
@@ -2518,6 +2696,16 @@ class MainWindow(QMainWindow):
                 if v is not None:
                     sp.setValue(int(v))
             self.keep_hot.setChecked(bool(u.get("keep_hot", False)))
+            tm = core.parse_number(u.get("bed_timer_min"))
+            if tm is not None:
+                self.bed_timer_min.setValue(int(tm))
+            self.bed_timer_on.setChecked(bool(u.get("bed_timer_on", False)))
+            pn = core.parse_number(u.get("print_nozzle"))
+            if pn is not None:
+                self.print_nozzle.setValue(int(pn))
+            pb = core.parse_number(u.get("print_bed"))
+            if pb is not None:
+                self.print_bed.setValue(int(pb))
             if u.get("object") in core.OBJECTS and u["object"] != self.obj_box.currentText():
                 self.obj_box.blockSignals(True)
                 self.obj_box.setCurrentText(u["object"])

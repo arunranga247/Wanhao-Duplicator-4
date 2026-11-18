@@ -12,6 +12,7 @@ __copyright__ = "Copyright (c) 2026 ARUN"
 
 import os
 import queue
+import struct
 import threading
 import time
 
@@ -25,6 +26,39 @@ WD_RISE_C, WD_WINDOW_S = 8, 90
 # bed: heats slowly (big plate), so its own rule - at least +2 C in 120 s while below target - 5
 BED_RISE_C, BED_WINDOW_S = 2, 120
 BED_OVER_C, BED_HARD_MAX_C, BED_JUMP_C = 12, 80, 8      # over-temperature / sudden-jump limits
+
+
+def bed_override(c, bed, started=True):
+    """Bed temperature chosen for this print (None = as in the file).
+    -> (command to send, skip). The file's bed targets above 0 become `bed`, and its "wait for the
+    bed" is skipped so the print starts at once. Before the first move (`started` False) a bed-OFF
+    command also becomes `bed` - a file made with the bed off still heats when a bed was chosen.
+    A bed-OFF command after printing started (the end of the file) is never changed."""
+    if bed is None:
+        return c, False
+    if c[0] == 141:                                           # wait for build platform
+        return c, True
+    if c[0] == 136 and len(c) >= 6 and c[1] == 0 and c[2] == 31:        # set build platform temperature
+        target = struct.unpack("<h", bytes(c[4:6]))[0]
+        if target > 0 or (not started and bed > 0):
+            return struct.pack("<BBBBh", 136, 0, 31, 2, int(bed)), False
+    return c, False
+
+
+NOZZLE_PRINT_MIN_C = 170       # file targets at/above this are printing temperatures (below = standby)
+
+
+def nozzle_override(c, nozzle):
+    """Nozzle temperature chosen for this print (None = as in the file) -> command to send.
+    The file's PRINTING targets (>= 170 C) become `nozzle`; a standby target (the waiting nozzle of a
+    two-colour print) and nozzle-OFF are never changed. The file's "wait for the nozzle" stays: the
+    nozzle sensors work, so the print still starts only when the nozzle is really hot."""
+    if nozzle is None:
+        return c
+    if c[0] == 136 and len(c) >= 6 and c[1] in (0, 1) and c[2] == 3:        # set extruder temperature
+        if struct.unpack("<h", bytes(c[4:6]))[0] >= NOZZLE_PRINT_MIN_C:
+            return struct.pack("<BBBBh", 136, c[1], 3, 2, int(nozzle))
+    return c
 
 
 # =============================================================================
@@ -44,6 +78,8 @@ class Worker(threading.Thread):
         self.wd = {}                   # heater -> (t_start, temp_start)
         self.homed = False
         self._last_poll = 0.0
+        self.bed_timer_s = 0           # > 0: bad bed sensor - bed heats at most this long, then OFF
+        self.bed_off_at = None         # when the running bed timer switches the bed off
 
     # ---- public (called from GUI thread) ---------------------------------
     def submit(self, name, *args):
@@ -98,6 +134,11 @@ class Worker(threading.Thread):
             except Exception as e:                     # keep the worker alive
                 self.log("ERROR: %s" % e)
         if self.link:
+            if self.bed_timer_s and self.bed_off_at is not None:
+                try:                                   # app closing: nobody would stop the timer bed
+                    self.link.set_bed(0)
+                except Exception:                      # noqa: BLE001
+                    pass
             self.link.close()
 
     def _maybe_reconnect(self):
@@ -148,9 +189,28 @@ class Worker(threading.Thread):
             self._wd_arm(("r", "l")[tool], c)
             self.log("%s extruder target -> %d C" % (("Right", "Left")[tool], c))
         elif name == "set_bed":
+            if self.print_job is not None:
+                self.print_job["bed"] = int(args[0])          # live change: later bed commands use it too
             L.set_bed(args[0], **kw)
             self._wd_arm("bed", args[0])
             self.log("Bed target -> %d C" % args[0])
+        elif name == "bed_timer":
+            self.bed_timer_s = max(0, int(args[0])) * 60
+            if not self.bed_timer_s:
+                self.bed_off_at = None
+            self.log("Bed timer %s" % ("ON: bed switches off %d min after it starts heating"
+                                       % (self.bed_timer_s // 60) if self.bed_timer_s else "off"))
+        elif name == "set_nozzle":
+            v = int(args[0])                                   # running print: every printing nozzle
+            if self.print_job is not None:
+                self.print_job["nozzle"] = v                   # later temperature commands use it too
+            t = L.temps()
+            tools = [tool for tool, key in ((0, "r_t"), (1, "l_t")) if (t.get(key) or 0) >= NOZZLE_PRINT_MIN_C]
+            for tool in tools:
+                L.set_temp(tool, v, **kw)
+                self._wd_arm(("r", "l")[tool], v)
+            self.log("Nozzle for this print -> %d C (%s)" % (
+                v, " + ".join(("right", "left")[x] for x in tools) or "no nozzle heating right now"))
         elif name == "heaters_off":
             L.heaters_off()
             self.wd.clear()
@@ -208,12 +268,18 @@ class Worker(threading.Thread):
             self._motor_test()
         elif name == "print":
             path = args[0]
+            bed = args[1] if len(args) > 1 else None          # None = bed as in the file
+            nozzle = args[2] if len(args) > 2 else None       # None = nozzle as in the file
             cmds = s3g.split_x3g(open(path, "rb").read())
             if not L.is_finished():
                 self.log("Printer is busy - finish or stop the current job first")
                 return
-            self.print_job = {"cmds": cmds, "i": 0, "name": os.path.basename(path), "t0": time.time()}
-            self.log("USB print started: %s (%d commands)" % (os.path.basename(path), len(cmds)))
+            self.print_job = {"cmds": cmds, "i": 0, "name": os.path.basename(path), "t0": time.time(),
+                              "bed": None if bed is None else int(bed),
+                              "nozzle": None if nozzle is None else int(nozzle), "path": path}
+            self.log("USB print started: %s (%d commands)%s" % (
+                os.path.basename(path), len(cmds),
+                "" if bed is None else " - bed %d C for this print, no waiting for the bed" % int(bed)))
         elif name == "pause":
             L.pause_toggle()
             self.log("Pause / resume toggled")
@@ -266,9 +332,16 @@ class Worker(threading.Thread):
         t_end = time.time() + 0.15
         while job["i"] < len(job["cmds"]) and time.time() < t_end:
             c = job["cmds"][job["i"]]
+            c, skip = bed_override(c, job.get("bed"), job.get("moved", False))
+            c = nozzle_override(c, job.get("nozzle"))
+            if skip:                                          # the file's "wait for the bed": print now
+                job["i"] += 1
+                continue
             r = self.link.send(c)
             if r[0] == s3g.OK:
                 job["i"] += 1
+                if c[0] == 155:                               # first move sent: later bed-OFF = the end
+                    job["moved"] = True
                 if c[0] in (135, 141):                # wait-for-heat (nozzle / bed) now queued
                     job["heat_wait"] = c[1] if c[0] == 135 else "bed"
                     self.post("phase", "heat", job["heat_wait"])
@@ -297,9 +370,32 @@ class Worker(threading.Thread):
         else:
             self.wd.pop(key, None)
 
+    def _bed_timer(self, t):
+        """Bad bed sensor: the bed heats blind, so TIME is the limit. Starts when the bed target
+        goes above 0 (button, file, LCD), switches the bed off when the time is up."""
+        if not self.bed_timer_s:
+            return
+        if not t.get("bed_t"):
+            self.bed_off_at = None
+            return
+        now = time.time()
+        if self.bed_off_at is None:
+            self.bed_off_at = now + self.bed_timer_s
+            self.log("Bed heating on the timer: switches OFF in %d min" % (self.bed_timer_s // 60))
+            return
+        if now >= self.bed_off_at:
+            if self.print_job is not None:
+                self.print_job["bed"] = 0                 # later bed commands in the file stay off
+            self.link.set_bed(0, abort_check=self._abort_check)
+            self.bed_off_at = None
+            self.post("alarm", "Bed timer: %d min are up - bed heater switched OFF "
+                               "(the sensor cannot see the bed temperature)" % (self.bed_timer_s // 60))
+
     def _watchdog(self, t):
         now = time.time()
         for key, name in (("r", "Right extruder"), ("l", "Left extruder"), ("bed", "Bed")):
+            if key == "bed" and self.bed_timer_s:       # bed sensor known bad: the timer guards it
+                continue
             cur, tgt = t.get(key), t.get(key + "_t")
             if not tgt:
                 self.wd.pop(key, None)
@@ -367,6 +463,7 @@ class Worker(threading.Thread):
                 self.log("Printer resumed - heater checks restart")
             self._paused = False
             self._watchdog(t)
+        self._bed_timer(t)                            # also while paused: time is the only limit
         if tuple(steps[:3]) == s3g.HOME_STEPS[:3]:
             self.homed = True                  # home offsets recalled after a full home
         self.post("status", {"t": t, "pos": pos, "es": es, "board": st, "homed": self.homed})

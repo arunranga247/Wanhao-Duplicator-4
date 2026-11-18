@@ -20,6 +20,7 @@ NOZZLE_MAX_C = 240
 FILAMENT_MIN_C, FILAMENT_MAX_C = 170, 240
 BED_MAX_C = 70                  # PLA never needs more; matches gcode2x3g / stream_x3g limits
 BED_MIN_PLAUSIBLE_C = 15        # a bed reading below room temperature = broken sensor wire
+BED_TIMER_MAX_MIN = 5           # bad bed sensor: the bed may heat at most this long, then OFF
 SWITCH_FLUTTER_N, SWITCH_FLUTTER_S = 6, 10      # >6 limit-switch changes in 10 s = loose wire?
 
 # Google Material colours (light = Google Workspace, dark = Google dark theme tints)
@@ -119,27 +120,27 @@ OBJECTS = {
                 "simple parts like boxes and brackets (keep 0 for detailed figures). "
                 "🔍 Fit check: will it print well (3-D report). 🧩 Assembly: do several parts "
                 "(e.g. a box + the boards inside) collide?",
-        "params": [("layer-height", "Layer (mm)", 0.2, 0.1, 0.3, 0.05),
+        "params": [("layer-height", "Layer height (mm)", 0.2, 0.1, 0.3, 0.05),
                    ("infill", "Infill (%)", 20, 0, 100, 5),
-                   ("walls", "Walls", 3, 1, 6, 1),
-                   ("supports", "Supports 0/1/2", 0, 0, 2, 1),
+                   ("walls", "Walls (lines)", 3, 1, 6, 1),
+                   ("supports", "Supports", 0, 0, 2, 1),
                    ("brim", "Brim (mm)", 5, 0, 15, 1),
                    ("scale", "Scale (%)", 100, 10, 500, 5),
-                   ("temp", "Nozzle °C", 210, 180, 240, 5),
-                   ("first-temp", "1st layer °C", 220, 180, 240, 5),
-                   ("z-offset", "Squish (mm)", -0.05, -0.3, 0.3, 0.02),
-                   ("color-z", "Colour Z (mm)", 0, 0, 140, 0.1),
-                   ("fast", "Fast 0/1", 0, 0, 1, 1)]},
+                   ("temp", "Nozzle (°C)", 210, 180, 240, 5),
+                   ("first-temp", "First layer (°C)", 220, 180, 240, 5),
+                   ("z-offset", "1st-layer squish", -0.05, -0.3, 0.3, 0.02),
+                   ("color-z", "Colour change Z", 0, 0, 140, 0.1),
+                   ("fast", "Speed", 0, 0, 1, 1)]},
     "Twisted flower vase": {
         "script": "make_vase.py", "name": "TWIST_VASE", "extruder": False, "fixed": [],
         "desc": "6-lobed vase that twists and bulges. Brim + solid spiral base, then one "
                 "continuous spiral wall. Left extruder. Looks great, ~15-20 min.",
         "params": [("height", "Height (mm)", 25, 5, 60, 1), ("radius", "Radius (mm)", 14, 6, 30, 1),
                    ("twist", "Twist (°)", 60, 0, 360, 10), ("lobes", "Lobes", 6, 3, 12, 1),
-                   ("temp", "Nozzle °C", 210, 180, 240, 5),
-                   ("first-temp", "1st layer °C", 220, 180, 240, 5),
+                   ("temp", "Nozzle (°C)", 210, 180, 240, 5),
+                   ("first-temp", "First layer (°C)", 220, 180, 240, 5),
                    ("brim", "Brim rings", 6, 0, 15, 1),
-                   ("z-offset", "Squish (mm)", -0.08, -0.3, 0.3, 0.02)]},
+                   ("z-offset", "1st-layer squish", -0.08, -0.3, 0.3, 0.02)]},
     "Square block": {
         "script": "make_dual_sample.py", "name": "SQUARE", "extruder": True, "fixed": ["--slow-z"],
         "desc": "Solid square block in the middle of the bed, one extruder. Quick test print.",
@@ -194,6 +195,17 @@ PARAM_HELP = {
                  "Both = two parts in two colours in ONE print, e.g. a case base in one colour and its "
                  "lid in another: part 1 on the left nozzle, part 2 on the right nozzle, side by side "
                  "with a small purge tower that keeps the colours clean.",
+    "_print_nozzle": "Nozzle temperature for THIS print, chosen by you (180 - 240 C).\n"
+                     "'as in file' = the temperature the file was made with.\n"
+                     "The print still waits until the nozzle is really hot (the nozzle sensors work).\n"
+                     "During a print, change it and press 'Set now' - for example hotter if the\n"
+                     "layers do not stick, cooler if it strings or the details melt.",
+    "_print_bed": "Bed temperature for THIS print, chosen by you.\n"
+                  "'as in file' = what the file says (it waits until the bed is hot).\n"
+                  "0 = bed off: the print starts at once (use glue stick or tape).\n"
+                  "Any other value: the bed heats to it, but the print does NOT wait - it starts as soon "
+                  "as the nozzle is hot. While printing you can change it and press 'Set now'.\n"
+                  "Safety stays on: max 70 °C, refused while the bed sensor reads below room temperature.",
     "_model2": "Part 2 of a two-colour print (for example the lid). It is printed by the RIGHT nozzle, "
                "next to part 1. Load the second colour in the right nozzle.",
     "_model": "The 3D design file to print: STL, 3MF or OBJ (from Tinkercad, Thingiverse, Paint 3D ...).",
@@ -201,10 +213,11 @@ PARAM_HELP = {
 
 
 # ---- safety decisions (pure functions: easy to test, same in every window) ---------------------
-def bed_heat_decision(target, allowed, bed_now):
+def bed_heat_decision(target, allowed, bed_now, timer_min=0):
     """May the bed be set to `target` °C?  -> (ok, value, title, message).
     Blocked when bed heating is switched off, or the bed sensor reads below room temperature
-    (broken wire: the controller would think the bed is cold and heat without limit)."""
+    (broken wire: the controller would think the bed is cold and heat without limit) - unless the
+    bed timer is on (timer_min > 0): then it heats, and the app switches it OFF after timer_min."""
     t = parse_number(target)
     if t is None:
         return False, 0, "Bed", "'%s' is not a number." % target
@@ -215,6 +228,10 @@ def bed_heat_decision(target, allowed, bed_now):
         return False, 0, "Bed heating blocked", (
             "Bed heating is switched off ('Allow bed heating').\n"
             "Heating the bed with a faulty sensor can overheat it.")
+    if bed_now is not None and bed_now < BED_MIN_PLAUSIBLE_C and timer_min > 0:
+        return True, min(t, BED_MAX_C), "Bed on a timer", (
+            "The bed sensor reads %s °C, so the printer cannot see the bed temperature and heats at "
+            "full power.\nThe bed switches OFF automatically after %d min." % (bed_now, timer_min))
     if bed_now is not None and bed_now < BED_MIN_PLAUSIBLE_C:
         return False, 0, "Bed heating blocked", (
             "The bed sensor reads %s °C - below room temperature.\n"
@@ -245,9 +262,10 @@ def extrude_decision(nozzle_now, mm):
     return mm, None
 
 
-def print_gate(st, check_ok, check_text, connected, bed_allowed, bed_now):
-    """Can this file be printed?  -> list of (kind, title, message), kind 'block' or 'confirm'.
-    Empty list = go ahead. Any 'block' = never print; 'confirm' = ask the user."""
+def print_gate(st, check_ok, check_text, connected, bed_allowed, bed_now, bed_timer_min=0):
+    """Can this file be printed?  -> list of (kind, title, message), kind 'block', 'confirm' or 'bed_off'.
+    Empty list = go ahead. Any 'block' = never print; 'confirm' = ask the user;
+    'bed_off' = the bed must not heat - offer to print this file with the bed OFF."""
     if not connected:
         return [("block", "Print", "The printer is not connected.")]
     if not check_ok:
@@ -256,17 +274,19 @@ def print_gate(st, check_ok, check_text, connected, bed_allowed, bed_now):
     out = []
     if st.get("bed"):
         if not bed_allowed:
-            out.append(("block", "Bed heating blocked",
+            out.append(("bed_off", "Bed heating blocked",
                         "This file heats the bed to %d °C, but 'Allow bed heating' is switched off "
                         "in the Printer tab.\n\nSwitch it on if the bed reads room temperature correctly, "
                         "or use a file made with bed 0." % st["bed"]))
+        elif bed_now is not None and bed_now < BED_MIN_PLAUSIBLE_C and bed_timer_min > 0:
+            pass                                        # bed timer: warm for the first layers, then OFF
         elif bed_now is not None and bed_now < BED_MIN_PLAUSIBLE_C:
-            out.append(("block", "Bed sensor fault",
+            out.append(("bed_off", "Bed sensor fault",
                         "This file heats the bed to %d °C, but the bed sensor reads %s °C (below room "
                         "temperature) - the wire is probably broken and the bed could overheat.\n\n"
                         "Repair it, or use a file made with bed 0." % (st["bed"], bed_now)))
         elif st["bed"] > BED_MAX_C:
-            out.append(("block", "Bed too hot", "This file heats the bed to %d °C (limit %d °C)."
+            out.append(("bed_off", "Bed too hot", "This file heats the bed to %d °C (limit %d °C)."
                         % (st["bed"], BED_MAX_C)))
     if st.get("t1_change"):
         out.append(("block", "Unsafe file", "This file uses a firmware T1 tool change. Your printer's "

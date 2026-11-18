@@ -354,13 +354,15 @@ class Printing(Base):
 
     def tearDown(self):
         self.w.printing = False
+        self.w.print_bed.setValue(-1)
+        self.w.print_nozzle.setValue(175)
 
     def test_selected(self):
         self.assertEqual(self.w.selected_path(), self.path)
 
     def test_happy_path(self):
         self.w.start_print()
-        self.assertEqual(self.sent(), [("print", self.path)])
+        self.assertEqual(self.sent(), [("print", self.path, None, None)])
         self.assertTrue(self.w.printing)
         self.assertIn("checklist", [k for k, *_ in self.w.shown])
 
@@ -383,9 +385,13 @@ class Printing(Base):
     def test_bed_file_with_broken_sensor(self):
         self.st["bed"] = 60
         self.w.on_status(status(bed=3))
+        self.w.answers["ask"] = False                     # "print with the bed OFF?" -> No
         self.w.start_print()
         self.assertEqual(self.sent(), [])
-        self.assertIn("Bed sensor fault", self.titles("error"))
+        self.assertIn("Bed sensor fault", self.titles("ask"))
+        self.w.answers["ask"] = True                      # -> Yes: prints with the bed off
+        self.w.start_print()
+        self.assertEqual(self.sent(), [("print", self.path, 0, None)])
 
     def test_t1_file(self):
         self.st["t1_change"] = True
@@ -399,7 +405,52 @@ class Printing(Base):
         self.assertEqual(self.sent(), [])
         self.w.answers["ask"] = True
         self.w.start_print()
-        self.assertEqual(self.sent(), [("print", self.path)])
+        self.assertEqual(self.sent(), [("print", self.path, None, None)])
+
+    def test_bed_off_for_this_print_with_broken_sensor(self):
+        self.st["bed"] = 60                               # file wants 60 C, sensor reads 11 C
+        self.w.on_status(status(bed=11))
+        self.w.print_bed.setValue(-1)                     # as in file -> refused
+        self.w.answers["ask"] = False
+        self.w.start_print()
+        self.w.answers["ask"] = True
+        self.assertEqual(self.sent(), [])
+        self.w.print_bed.setValue(0)                      # bed off for this print -> allowed
+        self.w.start_print()
+        self.assertEqual(self.sent(), [("print", self.path, 0, None)])
+        self.w.print_bed.setValue(-1)
+
+    def test_bed_value_still_checked(self):
+        self.st["bed"] = 0
+        self.w.on_status(status(bed=11))                  # broken sensor
+        self.w.print_bed.setValue(50)                     # asking for heat -> refused
+        self.w.answers["ask"] = False                     # "print with the bed OFF?" -> No
+        self.w.start_print()
+        self.assertEqual(self.sent(), [])
+        self.w.answers["ask"] = True                      # -> Yes: never 50, only bed off
+        self.w.start_print()
+        self.assertEqual(self.sent(), [("print", self.path, 0, None)])
+
+    def test_nozzle_for_this_print(self):
+        self.w.print_nozzle.setValue(225)
+        self.w.start_print()
+        self.assertEqual(self.sent(), [("print", self.path, None, 225)])
+        self.w.worker.sent.clear()
+        self.w.print_nozzle.setValue(215)                 # during the print: Set now
+        self.w.set_print_nozzle()
+        self.assertEqual(self.sent(), [("set_nozzle", 215)])
+        self.w.print_nozzle.setValue(175)                 # 175 = "as in file"
+        self.assertIsNone(self.w.print_nozzle_choice())
+
+    def test_set_now_during_print(self):
+        self.w.printing = True
+        self.w.print_bed.setValue(40)
+        self.w.set_print_bed()
+        self.assertEqual(self.sent(), [("set_bed", 40)])
+        self.w.on_status(status(bed=9))                   # sensor fault -> refused
+        self.w.set_print_bed()
+        self.assertEqual(self.sent(), [("set_bed", 40)])
+        self.w.print_bed.setValue(-1)
 
     def test_cancel_print(self):
         self.w.printing = True
@@ -418,6 +469,7 @@ class Printing(Base):
         self.assertTrue(wait_for(lambda: self.path in self.w._check_cache, 120))
         self.assertTrue(wait_for(lambda: self.w.file_preview.src is not None, 60))
         self.assertIn("T_PRINT.x3g", self.w.file_info.toPlainText())
+        wait_for(lambda: self.w._item_of(self.path).text(4) != "…", 30)    # the list updates on the next event
         self.assertIn(self.w._item_of(self.path).text(4), ("✅ OK", "❌ FAIL"))
 
     def test_delete(self):
@@ -759,6 +811,18 @@ class Layout(Base):
             self.w.tabs.setCurrentWidget(self.w.tab_print)
             wait_for(lambda: False, 0.15)
             self.assertTrue(self.visible_inside_window(self.w.print_btn), "Print button hidden at %s" % (size,))
+        self.w.resize(1366, 740)
+
+    def test_print_job_card_never_squeezed(self):          # it was cut off on a 1366 x 740 laptop
+        self.w.tabs.setCurrentWidget(self.w.tab_print)
+        job = self.w.prog.parentWidget()
+        files = self.w.tree.parentWidget()
+        for size in ((1366, 740), (1280, 700), (1920, 1040)):
+            self.w.resize(*size)
+            wait_for(lambda: False, 0.15)
+            self.assertGreaterEqual(job.height(), job.minimumSizeHint().height(), "job card squeezed at %s" % (size,))
+            self.assertTrue(self.visible_inside_window(job), "job card off screen at %s" % (size,))
+            self.assertGreaterEqual(files.height(), files.minimumSizeHint().height(), "file list squeezed at %s" % (size,))
         self.w.resize(1366, 740)
 
     def test_no_button_cut_off_sideways(self):
