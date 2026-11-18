@@ -485,7 +485,7 @@ void main() {
 GL_FLOAT, GL_TRIANGLES, GL_LINES = 0x1406, 4, 1
 GL_DEPTH_TEST, GL_COLOR_BIT, GL_DEPTH_BIT, GL_POLY_OFFSET = 0x0B71, 0x4000, 0x0100, 0x8037
 GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA = 0x0BE2, 0x0302, 0x0303
-GL_LESS, GL_LEQUAL, GL_ALWAYS = 0x0201, 0x0203, 0x0207
+GL_LESS, GL_LEQUAL, GL_GREATER, GL_ALWAYS = 0x0201, 0x0203, 0x0204, 0x0207
 TRAIL_RGB = (1.0, 0.45, 0.10)           # last moves of the live print: glowing orange
 PLAN_RGB = (0.55, 0.85, 1.0)            # rest of the CURRENT layer: where the nozzle goes next
 LIVE_TRAIL_SEGS = 12                    # glow on the last moves only (infill lines are long)
@@ -856,6 +856,7 @@ class GLViewer(ViewMixin, QOpenGLWidget):
                 f.glDrawArrays(GL_LINES, *r["trail"])
             f.glEnable(GL_BLEND)
             f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            f.glColorMask(True, True, True, False)                # keep the picture opaque (alpha 1)
             f.glDepthMask(False)                                  # see-through: never hides the nozzle
             if r["plan"][1]:
                 pr.setUniformValue(loc_col, QVector3D(*PLAN_RGB))
@@ -869,23 +870,22 @@ class GLViewer(ViewMixin, QOpenGLWidget):
                 f.glLineWidth(1.0)
                 f.glDrawArrays(GL_LINES, *r["rest"])
                 pr.setUniformValue1f(loc_vcol, 0.0)
-            f.glDepthMask(True)
-            f.glDisable(GL_BLEND)
-            f.glDepthFunc(GL_LESS)
-            pr.setUniformValue1f(loc_alpha, 1.0)
             f.glLineWidth(1.0)
             self.prog.disableAttributeArray(2)
-            if self.n_marker:                                     # the nozzle, on top of everything
+            if self.n_marker:                                     # the nozzle
                 self._attrs(self.marker_buf)
                 pr.setUniformValue1f(loc_lit, 1.0)
                 pr.setUniformValue(loc_col, QVector3D(*NOZZLE_RGB))
+                f.glDepthFunc(GL_GREATER)                         # 1) faint where the part is in front
+                pr.setUniformValue1f(loc_alpha, 0.35)             #    of it (never fully hidden)
                 f.glDrawArrays(GL_TRIANGLES, 0, self.n_marker)
-                f.glClear(GL_DEPTH_BIT)                           # ... and a see-through copy where
-                f.glEnable(GL_BLEND)                              # the part is in front of it
-                pr.setUniformValue1f(loc_alpha, 0.35)
+            f.glDepthMask(True)
+            f.glDisable(GL_BLEND)
+            f.glColorMask(True, True, True, True)
+            f.glDepthFunc(GL_LESS)
+            pr.setUniformValue1f(loc_alpha, 1.0)
+            if self.n_marker:                                     # 2) solid where it can be seen
                 f.glDrawArrays(GL_TRIANGLES, 0, self.n_marker)
-                f.glDisable(GL_BLEND)
-                pr.setUniformValue1f(loc_alpha, 1.0)
         elif self.mode == "paths" and self.path_vert:
             self._attrs(self.path_buf, colours=True)
             pr.setUniformValue1f(loc_lit, 0.0)
